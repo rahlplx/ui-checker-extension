@@ -44,4 +44,4 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for complete technical documentation.
 
 ## License
 
-Apache License 2.0 — Based on the [Impeccable](https://github.com/pbakaus/impeccable) project by Paul Bakaus.
+Apache License 2.0
