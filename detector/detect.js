@@ -1958,14 +1958,23 @@ function checkPageLayout(doc, win) {
 // ─── Section 7: Browser UI (IS_BROWSER only) ────────────────────────────────
 
 if (IS_BROWSER) {
+  // IDEMPOTENCY: Remove any prior message listener from a previous injection.
+  // Without this, re-injection (after DevTools close/reopen) stacks duplicate listeners,
+  // causing double-scans, double overlays, and garbled results.
+  if (typeof window.__UICHECKER_PREV_HANDLER__ === 'function') {
+    window.removeEventListener('message', window.__UICHECKER_PREV_HANDLER__);
+    window.__UICHECKER_PREV_HANDLER__ = null;
+  }
+
   // Detect extension mode via the script tag's data attribute or the document element fallback.
   // currentScript is reliable for synchronously-executing scripts (which our IIFE is).
   const _myScript = document.currentScript;
   const EXTENSION_MODE = (_myScript && _myScript.dataset.uicheckerExtension === 'true')
     || document.documentElement.dataset.uicheckerExtension === 'true';
 
-  const BRAND_COLOR = 'oklch(55% 0.18 250)';
-  const BRAND_COLOR_HOVER = 'oklch(45% 0.18 250)';
+  // Red for page overlays (high-visibility), blue kept only in extension panel UI.
+  const BRAND_COLOR = 'oklch(60% 0.27 25)';
+  const BRAND_COLOR_HOVER = 'oklch(50% 0.27 25)';
   const LABEL_BG = BRAND_COLOR;
   const OUTLINE_COLOR = BRAND_COLOR;
 
@@ -1978,7 +1987,8 @@ if (IS_BROWSER) {
     }
     .uichecker-overlay:not(.uichecker-banner) {
       pointer-events: none;
-      outline: 2px solid ${OUTLINE_COLOR};
+      outline: 3px solid ${OUTLINE_COLOR};
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.15), 0 0 8px 0 rgba(220,38,38,0.2);
       border-radius: 4px;
       transition: outline-color 0.15s ease;
       animation: uichecker-reveal 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
@@ -2644,9 +2654,14 @@ if (IS_BROWSER) {
   };
 
   if (EXTENSION_MODE) {
-    // Extension mode: listen for commands, don't auto-scan
-    window.addEventListener('message', (e) => {
+    // Extension mode: listen for commands, don't auto-scan.
+    // Handler is stored on window so re-injection can remove the old listener first.
+    const _cmdHandler = (e) => {
       if (e.source !== window || !e.data || e.data.source !== 'uichecker-command') return;
+      if (e.data.action === 'ping') {
+        // Probe response: detector is alive, respond with ready
+        window.postMessage({ source: 'uichecker-ready' }, '*');
+      }
       if (e.data.action === 'scan') {
         if (e.data.config) window.__UICHECKER_CONFIG__ = e.data.config;
         scan();
@@ -2698,7 +2713,9 @@ if (IS_BROWSER) {
           o.classList.remove('uichecker-spotlight-dimmed');
         }
       }
-    });
+    };
+    window.__UICHECKER_PREV_HANDLER__ = _cmdHandler;
+    window.addEventListener('message', _cmdHandler);
     window.postMessage({ source: 'uichecker-ready' }, '*');
   } else {
     if (document.readyState === 'loading') {

@@ -106,20 +106,31 @@
       return;
     }
 
-    // Set the extension flag via a data attribute (CSP-safe: content scripts share the DOM)
+    // Probe first: if the detector is already alive in the page (e.g., SW restart reset
+    // our `injected` flag but the page context still has the detector running), it will
+    // respond with `uichecker-ready` and we'll scan without re-injecting.
+    // If no response arrives within 120ms, request SW-based injection which bypasses
+    // the browser's script-URL cache (unlike <script src="..."> tags which don't re-execute
+    // the same URL in the same document).
+    pendingScan = true;
     document.documentElement.dataset.uicheckerExtension = 'true';
 
-    // Inject the detector script into page context
-    const script = document.createElement('script');
-    script.src = chrome.runtime.getURL('detector/detect.js');
-    script.dataset.uicheckerExtension = 'true';
-    pendingScan = true;
-    script.onload = () => script.remove();
-    script.onerror = () => {
-      script.remove();
-      // Fallback: use chrome.scripting.executeScript for strict CSP pages
-      chrome.runtime.sendMessage({ action: 'inject-fallback' });
+    let probeAnswered = false;
+    window.postMessage({ source: 'uichecker-command', action: 'ping' }, '*');
+
+    setTimeout(() => {
+      if (!probeAnswered && pendingScan) {
+        // Detector didn't respond — request SW to inject via chrome.scripting (always fresh)
+        chrome.runtime.sendMessage({ action: 'inject-fallback' });
+      }
+    }, 120);
+
+    // Track whether the probe was answered (uichecker-ready fires via window message listener)
+    const _onProbeReady = (e) => {
+      if (e.source !== window || !e.data || e.data.source !== 'uichecker-ready') return;
+      probeAnswered = true;
+      window.removeEventListener('message', _onProbeReady);
     };
-    (document.head || document.documentElement).appendChild(script);
+    window.addEventListener('message', _onProbeReady);
   }
 })();

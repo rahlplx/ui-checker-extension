@@ -39,6 +39,9 @@ const emptyState = document.getElementById('empty-state');
 const btnRescan = document.getElementById('btn-rescan');
 const btnToggle = document.getElementById('btn-toggle');
 const btnCopyAll = document.getElementById('btn-copy-all');
+const btnClonePage = document.getElementById('btn-clone-page');
+const btnCloneComponent = document.getElementById('btn-clone-component');
+const cloneToast = document.getElementById('clone-toast');
 const settingsContainer = document.getElementById('settings-container');
 const settingsList = document.getElementById('settings-list');
 const btnSettings = document.getElementById('btn-settings');
@@ -356,13 +359,111 @@ async function copyToClipboard(text, btn) {
         btn.classList.remove('copied');
       }, 1200);
     }
+    return true;
   } catch (err) {
     console.warn('Copy failed', err);
+    return false;
   }
 }
 
 btnCopyAll.addEventListener('click', () => {
   copyToClipboard(formatFindingsForCopy(currentFindings), btnCopyAll);
+});
+
+// ── Clone utilities ────────────────────────────────────────────────────────────
+
+let _cloneToastTimer = null;
+function showCloneToast(msg, type = 'success') {
+  cloneToast.textContent = msg;
+  cloneToast.className = `clone-toast visible ${type}`;
+  clearTimeout(_cloneToastTimer);
+  _cloneToastTimer = setTimeout(() => {
+    cloneToast.className = 'clone-toast';
+  }, 3000);
+}
+
+// Clone Page — serialises the full rendered document outerHTML.
+// Runs in the inspected page's MAIN world via eval (has access to DOM + computed styles).
+btnClonePage.addEventListener('click', () => {
+  btnClonePage.disabled = true;
+  chrome.devtools.inspectedWindow.eval(
+    `(function() {
+      try {
+        var clone = document.documentElement.cloneNode(true);
+        // Strip uichecker overlay artefacts so they don't end up in the snapshot
+        var toRemove = clone.querySelectorAll(
+          '.uichecker-overlay,.uichecker-label,.uichecker-banner,.uichecker-spotlight-backdrop,[id^="uichecker-live-"]'
+        );
+        for (var i = 0; i < toRemove.length; i++) toRemove[i].remove();
+        return '<!DOCTYPE html>\\n' + clone.outerHTML;
+      } catch(e) {
+        return '__ERROR__:' + e.message;
+      }
+    })()`,
+    (result, exceptionInfo) => {
+      btnClonePage.disabled = false;
+      if (exceptionInfo || !result || result.startsWith('__ERROR__')) {
+        showCloneToast('Clone failed: ' + (exceptionInfo?.value || result?.replace('__ERROR__:', '') || 'unknown error'), 'error');
+        return;
+      }
+      copyToClipboard(result, btnClonePage).then(ok => {
+        if (ok) showCloneToast('Page HTML copied — ' + result.length.toLocaleString() + ' chars');
+      });
+    }
+  );
+});
+
+// Clone Component — extracts the currently selected element ($0 in Elements panel)
+// with critical computed styles inlined. This is the proper implementation because
+// only the DevTools panel context has access to the $0 selection.
+btnCloneComponent.addEventListener('click', () => {
+  btnCloneComponent.disabled = true;
+  chrome.devtools.inspectedWindow.eval(
+    `(function() {
+      var el = $0;
+      if (!el || el === document.documentElement || el === document.body) {
+        return '__NO_ELEMENT__';
+      }
+      // Critical computed properties — layout, colour, typography, spacing
+      var PROPS = [
+        'display','position','top','right','bottom','left',
+        'width','height','min-width','min-height','max-width','max-height',
+        'padding','padding-top','padding-right','padding-bottom','padding-left',
+        'margin','margin-top','margin-right','margin-bottom','margin-left',
+        'flex','flex-direction','flex-wrap','align-items','justify-content','gap',
+        'grid','grid-template-columns','grid-template-rows','grid-column','grid-row',
+        'background','background-color','background-image',
+        'color','font-family','font-size','font-weight','font-style','line-height',
+        'letter-spacing','text-align','text-transform',
+        'border','border-top','border-right','border-bottom','border-left','border-radius',
+        'box-shadow','opacity','overflow','overflow-x','overflow-y',
+        'transform','transition','z-index','cursor','pointer-events',
+      ];
+      var cs = window.getComputedStyle(el);
+      var styles = PROPS.map(function(p){ return p+':'+cs.getPropertyValue(p); }).join(';');
+      var clone = el.cloneNode(true);
+      // Remove uichecker artefacts from the clone
+      var overlays = clone.querySelectorAll('.uichecker-overlay,.uichecker-label');
+      for (var i = 0; i < overlays.length; i++) overlays[i].remove();
+      var existing = clone.getAttribute('style') || '';
+      clone.setAttribute('style', (existing ? existing + ';' : '') + styles);
+      return clone.outerHTML;
+    })()`,
+    (result, exceptionInfo) => {
+      btnCloneComponent.disabled = false;
+      if (exceptionInfo) {
+        showCloneToast('Error: ' + exceptionInfo.value, 'error');
+        return;
+      }
+      if (result === '__NO_ELEMENT__') {
+        showCloneToast('Select an element in the Elements panel first ($0)', 'error');
+        return;
+      }
+      copyToClipboard(result, btnCloneComponent).then(ok => {
+        if (ok) showCloneToast('Component HTML copied with computed styles');
+      });
+    }
+  );
 });
 
 // Delegated hover tracking on the findings container.
