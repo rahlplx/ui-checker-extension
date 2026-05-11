@@ -2,8 +2,6 @@
 
 A Chrome DevTools extension that detects 27 deterministic UI anti-patterns in any web page. Identifies both AI-generated "slop" tells and general design/accessibility quality issues.
 
-> Forked from [Impeccable](https://github.com/pbakaus/impeccable) (Apache 2.0) with original branding removed.
-
 ## Features
 
 - **27 anti-pattern checks** — 15 AI slop tells + 12 quality/a11y issues
