@@ -28,14 +28,14 @@ const toast        = document.getElementById('toast');
 // ── Scan button HTML templates ──────────────────────────────────────────────
 // FIX #1: Store as constants so we can restore innerHTML exactly, never lose the icon.
 const SCAN_BTN_IDLE = `
-  <svg class="btn-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true" style="flex-shrink:0">
     <path d="M13.65 2.35A8 8 0 1 0 16 8h-2a6 6 0 1 1-1.76-4.24L10 6h6V0l-2.35 2.35z" fill="currentColor"/>
   </svg>
   Scan page`;
 
 const SCAN_BTN_ACTIVE = `
-  <svg class="btn-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true"
-       style="animation:spin 0.7s linear infinite;flex-shrink:0">
+  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"
+       style="flex-shrink:0;animation:spin 0.7s linear infinite">
     <path d="M13.65 2.35A8 8 0 1 0 16 8h-2a6 6 0 1 1-1.76-4.24L10 6h6V0l-2.35 2.35z" fill="currentColor"/>
   </svg>
   Scanning…`;
@@ -67,23 +67,25 @@ function setStatus(state, label) {
 function setCount(count, scanned) {
   if (!scanned) {
     countNumber.textContent = '—';
-    countNumber.className = 'count-number';
-    countBlock.className = 'count-block';
-    // FIX #4: corrected label
+    countNumber.className = 'score-number';
+    countBlock.className = 'score-block';
     countLabel.textContent = 'Click Scan page to begin';
+    countLabel.className = 'score-unit';
     setStatus('idle', 'Ready');
     return;
   }
   countNumber.textContent = String(count);
   if (count > 0) {
-    countNumber.className = 'count-number state-found';
-    countBlock.className = 'count-block state-found';
+    countNumber.className = 'score-number state-found';
+    countBlock.className = 'score-block state-found';
     countLabel.textContent = count === 1 ? 'anti-pattern detected' : 'anti-patterns detected';
+    countLabel.className = 'score-unit state-found';
     setStatus('found', `${count} issue${count === 1 ? '' : 's'}`);
   } else {
-    countNumber.className = 'count-number state-clean';
-    countBlock.className = 'count-block state-clean';
+    countNumber.className = 'score-number state-clean';
+    countBlock.className = 'score-block state-clean';
     countLabel.textContent = 'All clear — no anti-patterns';
+    countLabel.className = 'score-unit state-clean';
     setStatus('clean', 'All clear');
   }
 }

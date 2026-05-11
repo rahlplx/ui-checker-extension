@@ -1,105 +1,69 @@
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
+/* ─────────────────────────────────────────────────────────────
+   UI Checker — Elements Sidebar
+   Design: AI-Native Precision Dark / Light dual theme
+   ───────────────────────────────────────────────────────────── */
+
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
 :root {
-  --bg: #fff;
-  --text: #1a1a1a;
-  --text-dim: #666;
-  --text-faint: #999;
-  --accent: oklch(48% 0.18 250);
-  --rule: #e8e6e2;
+  --bg:      #ffffff;
+  --bg-sub:  #f6f7fb;
+  --hover:   #eef0f7;
+
+  --b1: #e4e6f0;
+  --b2: #d0d3e8;
+
+  --t1: #0f1117;
+  --t2: #5c6080;
+  --t3: #9098b8;
+
+  --blue:   #3b6ef5;
+  --purple: #9333ea;
+  --amber:  #d97706;
+  --green:  #059669;
+  --red:    #e11d48;
+
+  --slop-bar:    var(--purple);
+  --quality-bar: var(--amber);
 }
 
 .theme-dark {
-  --bg: #1e1e1e;
-  --text: #f5f3ef;
-  --text-dim: #9a9590;
-  --text-faint: #666;
-  --accent: oklch(60% 0.18 250);
-  --rule: #2a2a2a;
+  --bg:      #0b0d12;
+  --bg-sub:  #0f1118;
+  --hover:   #141720;
+
+  --b1: rgba(255,255,255,0.06);
+  --b2: rgba(255,255,255,0.10);
+
+  --t1: #e8eaf4;
+  --t2: #7880a0;
+  --t3: #3c4160;
+
+  --blue:   #4f7cff;
+  --purple: #a855f7;
+  --amber:  #f59e0b;
+  --green:  #10b981;
+  --red:    #f43f5e;
+
+  --slop-bar:    #a855f7;
+  --quality-bar: #f59e0b;
 }
 
 body {
   background: var(--bg);
-  color: var(--text);
+  color: var(--t1);
   font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.5;
-  padding: 12px 14px;
+  -webkit-font-smoothing: antialiased;
+  overflow-y: auto;
 }
 
-/* Empty / no-findings states */
-
-.state {
-  color: var(--text-faint);
-  font-size: 12px;
-  font-style: italic;
-  padding: 4px 0;
-}
-
-.state strong {
-  color: var(--text-dim);
-  font-style: normal;
-  font-weight: 600;
-}
-
-/* Finding list */
-
-.finding + .finding {
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid var(--rule);
-}
-
-.finding-header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 6px;
-}
-
-.finding-name {
-  font-weight: 600;
-  font-size: 12px;
-  color: var(--text);
-  letter-spacing: -0.005em;
-}
-
-.finding-name .marker {
-  color: var(--accent);
-  margin-right: 4px;
-}
-
-.finding-kind {
-  font-size: 9px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-faint);
-  flex-shrink: 0;
-}
-
-.finding-detail {
-  font-family: ui-monospace, 'SF Mono', 'Cascadia Code', monospace;
-  font-size: 11px;
-  color: var(--text-dim);
-  margin-bottom: 6px;
-}
-
-.finding-description {
-  font-size: 11px;
-  color: var(--text-dim);
-  line-height: 1.55;
-}
-
-/* ── Sidebar clone action bar ────────────────────────────────────────────────── */
+/* ── Clone action bar ─────────────────────────────────────── */
 .sidebar-actions {
-  padding: 8px 14px 6px;
-  border-bottom: 1px solid var(--rule);
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid var(--b1);
+  background: var(--bg-sub);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -108,54 +72,125 @@ body {
 .sidebar-clone-btn {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 9px;
-  background: transparent;
-  border: 1px solid var(--rule);
+  gap: 7px;
+  width: 100%;
+  padding: 6px 9px;
+  background: var(--bg);
+  border: 1px solid var(--b1);
   border-radius: 5px;
   font-size: 11px;
   font-weight: 500;
   font-family: inherit;
-  color: var(--text-dim);
+  color: var(--t2);
   cursor: pointer;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
-  width: 100%;
   text-align: left;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+  letter-spacing: -0.005em;
 }
+
+.sidebar-clone-btn svg { width: 12px; height: 12px; flex-shrink: 0; }
 
 .sidebar-clone-btn:hover {
-  background: rgba(128,128,128,0.08);
-  color: var(--text);
-  border-color: var(--text-faint);
+  background: var(--hover);
+  color: var(--t1);
+  border-color: var(--b2);
 }
 
-.sidebar-clone-btn:active {
-  transform: scale(0.98);
-}
+.sidebar-clone-btn:active { transform: scale(0.99); }
 
-.sidebar-clone-btn.state-ok {
-  color: #16a34a;
-  border-color: rgba(34,197,94,0.35);
-}
+.sidebar-clone-btn.state-ok    { color: var(--green); border-color: rgba(5,150,105,0.3); }
+.sidebar-clone-btn.state-error { color: var(--red);   border-color: rgba(225,29,72,0.3); }
 
-.sidebar-clone-btn.state-error {
-  color: #dc2626;
-  border-color: rgba(220,38,38,0.35);
-}
-
+/* Toast in sidebar */
 .sidebar-clone-toast {
   font-size: 10px;
-  color: var(--text-faint);
+  color: var(--t3);
   line-height: 1.4;
   white-space: normal;
   word-break: break-word;
-  min-height: 0;
-  max-height: 0;
   overflow: hidden;
-  transition: max-height 0.2s;
+  max-height: 0;
+  transition: max-height 0.2s ease, padding 0.2s ease;
 }
 
 .sidebar-clone-toast.visible {
-  max-height: 60px;
+  max-height: 48px;
   padding-top: 2px;
+}
+
+/* ── State messages ───────────────────────────────────────── */
+.state {
+  color: var(--t3);
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 10px;
+}
+
+.state strong {
+  color: var(--t2);
+  font-weight: 600;
+}
+
+/* ── Finding list ─────────────────────────────────────────── */
+#sidebar-content { padding: 0; }
+
+.finding {
+  padding: 8px 10px;
+  border-left: 2px solid transparent;
+  transition: border-color 0.1s;
+}
+
+.finding + .finding {
+  border-top: 1px solid var(--b1);
+}
+
+/* Colour by category */
+.finding.cat-slop    { border-left-color: var(--slop-bar); }
+.finding.cat-quality { border-left-color: var(--quality-bar); }
+
+.finding-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 3px;
+}
+
+.finding-name {
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--t1);
+  letter-spacing: -0.01em;
+}
+
+.finding-name .marker {
+  font-size: 9px;
+  margin-right: 3px;
+  color: var(--slop-bar);
+}
+
+.finding-kind {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--t3);
+  flex-shrink: 0;
+}
+
+.finding-kind.kind-slop    { color: var(--slop-bar); }
+.finding-kind.kind-quality { color: var(--quality-bar); }
+
+.finding-detail {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 10px;
+  color: var(--t2);
+  margin-bottom: 4px;
+  line-height: 1.4;
+}
+
+.finding-description {
+  font-size: 10px;
+  color: var(--t3);
+  line-height: 1.5;
 }

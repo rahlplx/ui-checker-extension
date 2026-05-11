@@ -106,16 +106,21 @@ function render(items) {
   const html = [];
   for (const item of items) {
     for (const f of item.findings) {
-      const isSlop = f.category === 'slop';
-      html.push(`
-        <div class="finding">
-          <div class="finding-header">
-            <span class="finding-name">${isSlop ? '<span class="marker">✦</span>' : ''}${escapeHtml(f.name)}</span>
-            <span class="finding-kind">${isSlop ? 'AI tell' : 'Quality'}</span>
-          </div>
-          <div class="finding-detail">${escapeHtml(f.detail)}</div>
-          <div class="finding-description">${escapeHtml(f.description)}</div>
-        </div>`);
+      const isSlop  = f.category === 'slop';
+      const catCls  = isSlop ? 'cat-slop' : 'cat-quality';
+      const kindCls = isSlop ? 'kind-slop' : 'kind-quality';
+      const kindLbl = isSlop ? 'AI tell' : 'Quality';
+      const marker  = isSlop ? '<span class="marker">✦</span>' : '';
+      html.push(
+        '<div class="finding ' + catCls + '">' +
+          '<div class="finding-header">' +
+            '<span class="finding-name">' + marker + escapeHtml(f.name) + '</span>' +
+            '<span class="finding-kind ' + kindCls + '">' + kindLbl + '</span>' +
+          '</div>' +
+          '<div class="finding-detail">' + escapeHtml(f.detail) + '</div>' +
+          '<div class="finding-description">' + escapeHtml(f.description) + '</div>' +
+        '</div>'
+      );
     }
   }
   content.innerHTML = html.join('');

@@ -209,7 +209,7 @@ function showScanning() {
   badge.textContent = '0';
   container.innerHTML = `
     <div class="scanning-indicator">
-      <div class="scanning-dot"></div>
+      <div class="scanning-ring"></div>
       Scanning page…
     </div>`;
 }

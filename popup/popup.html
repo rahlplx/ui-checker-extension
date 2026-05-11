@@ -5,9 +5,13 @@
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <header>
+
+  <header class="header">
     <div class="brand">
-      <span class="logo-mark" aria-hidden="true">✓</span>
+      <svg class="brand-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <rect width="20" height="20" rx="5" fill="#ef4444"/>
+        <path d="M5.5 10.5l3 3 6-6" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
       <span class="brand-name">UI Checker</span>
     </div>
     <div class="status-pill" id="status-pill">
@@ -16,45 +20,57 @@
     </div>
   </header>
 
-  <div class="count-block" id="count-block">
-    <span class="count-number" id="count-number">—</span>
-    <span class="count-label" id="count-label">Click Scan page to begin</span>
+  <div class="score-block" id="count-block">
+    <div class="score-left">
+      <span class="score-number" id="count-number">—</span>
+      <span class="score-unit" id="count-label">Click Scan page to begin</span>
+    </div>
+    <div class="score-bars" id="score-bars" aria-hidden="true">
+      <span class="bar b1"></span>
+      <span class="bar b2"></span>
+      <span class="bar b3"></span>
+      <span class="bar b4"></span>
+      <span class="bar b5"></span>
+    </div>
   </div>
 
-  <div class="actions-primary">
-    <button class="btn btn-scan" id="btn-scan" aria-label="Scan current page for UI anti-patterns">
-      <!-- icon injected by JS so restoration is reliable -->
-    </button>
-    <button class="btn btn-toggle" id="btn-toggle" aria-label="Toggle overlay visibility" title="Toggle overlays">
-      <svg class="btn-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+  <div class="primary-actions">
+    <button class="btn-scan" id="btn-scan" aria-label="Scan current page"></button>
+    <button class="btn-eye" id="btn-toggle" aria-label="Toggle overlays" title="Toggle overlays">
+      <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
         <path d="M8 3C4.36 3 1.26 5.28 0 8.5c1.26 3.22 4.36 5.5 8 5.5s6.74-2.28 8-5.5C14.74 5.28 11.64 3 8 3zm0 9.17c-2.58 0-4.67-2.09-4.67-4.67S5.42 2.83 8 2.83s4.67 2.09 4.67 4.67S10.58 12.17 8 12.17zM8 5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z" fill="currentColor"/>
       </svg>
     </button>
   </div>
 
-  <div class="divider"></div>
+  <div class="section-divider">
+    <span class="section-label">Extract</span>
+  </div>
 
-  <div class="actions-secondary">
-    <button class="btn btn-clone" id="btn-clone-page" aria-label="Copy full page HTML to clipboard">
-      <svg class="btn-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-        <rect x="1" y="3" width="10" height="12" rx="1.5" stroke="currentColor" stroke-width="1.5" fill="none"/>
-        <path d="M5 1h9a1 1 0 0 1 1 1v11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-      </svg>
-      Clone Page
-      <span class="btn-hint">Copies full HTML</span>
+  <div class="cmd-list">
+    <button class="cmd-item" id="btn-clone-page" aria-label="Copy full page HTML to clipboard">
+      <span class="cmd-icon">
+        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <rect x="1" y="3" width="10" height="12" rx="1.5" stroke="currentColor" stroke-width="1.4" fill="none"/>
+          <path d="M5 1h9a1 1 0 0 1 1 1v11" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+        </svg>
+      </span>
+      <span class="cmd-label">Clone Page</span>
+      <kbd class="cmd-key">HTML</kbd>
     </button>
-    <button class="btn btn-clone btn-clone-comp-redirect" id="btn-clone-component" aria-label="Open DevTools to clone a selected component">
-      <svg class="btn-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-        <rect x="2" y="2" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5" fill="none"/>
-        <rect x="8" y="8" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5" fill="none"/>
-        <path d="M8 5h4M5 8v4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-      </svg>
-      Clone Component
-      <span class="btn-hint">Select in DevTools first</span>
+    <button class="cmd-item cmd-item--redirect" id="btn-clone-component" aria-label="Open DevTools to clone a selected component">
+      <span class="cmd-icon">
+        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <rect x="1" y="1" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.4" fill="none"/>
+          <rect x="8" y="8" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.4" fill="none"/>
+          <path d="M8 4.5h4M4.5 8v4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+        </svg>
+      </span>
+      <span class="cmd-label">Clone Component</span>
+      <kbd class="cmd-key cmd-key--dim">DevTools ↗</kbd>
     </button>
   </div>
 
-  <!-- Toast sits outside flow so it doesn't push layout -->
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <script src="popup.js"></script>
