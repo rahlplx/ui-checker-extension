@@ -19,7 +19,7 @@
 
 /* Dark theme (set via JS from chrome.devtools.panels.themeName) */
 .theme-dark {
-  --bg: #1a1a1a;
+  --bg: #1e1e1e;
   --bg-subtle: #242424;
   --bg-hover: #2a2a2a;
   --text: #f5f3ef;
