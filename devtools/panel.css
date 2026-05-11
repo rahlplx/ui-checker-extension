@@ -567,3 +567,69 @@ h1 {
   0%, 100% { opacity: 0.3; }
   50% { opacity: 1; }
 }
+
+/* ── Labeled tool buttons (Clone Page / Clone Component) ──────────────────── */
+.tool-btn-labeled {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 500;
+  font-family: inherit;
+  color: var(--text-dim);
+  white-space: nowrap;
+  width: auto;
+}
+.tool-btn-labeled span {
+  line-height: 1;
+}
+.tool-btn-labeled:hover {
+  color: var(--text);
+}
+.tool-btn-labeled.copied,
+.tool-btn-labeled.active {
+  color: var(--accent);
+}
+
+/* ── Setting label + hint group ─────────────────────────────────────────────── */
+.setting-label-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.setting-hint {
+  font-size: 10px;
+  color: var(--text-dim);
+  line-height: 1.3;
+}
+
+/* ── Non-destructive re-scan overlay ─────────────────────────────────────────── */
+/* Sits at top of findings-container, above existing results */
+.scan-overlay {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-bottom: 4px;
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-dim);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+.scan-overlay .scanning-dot {
+  animation: pulse 1s ease-in-out infinite;
+}
+
+/* ── Clone toast (panel) — overwrite prior definition for wrapping ──────────── */
+.clone-toast {
+  font-size: 11px;
+  padding: 5px 10px;
+  line-height: 1.4;
+  white-space: normal;      /* FIX: was implicitly nowrap via single-line render */
+  word-break: break-word;
+  display: none;
+}

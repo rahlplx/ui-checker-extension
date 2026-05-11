@@ -7,41 +7,55 @@
 <body>
   <header>
     <div class="brand">
-      <span class="logo-mark">✓</span>
+      <span class="logo-mark" aria-hidden="true">✓</span>
       <span class="brand-name">UI Checker</span>
     </div>
-    <div class="status-dot" id="status-dot" title="No scan yet"></div>
+    <div class="status-pill" id="status-pill">
+      <span class="status-dot" id="status-dot"></span>
+      <span class="status-text" id="status-text">Ready</span>
+    </div>
   </header>
 
-  <div class="count-block">
+  <div class="count-block" id="count-block">
     <span class="count-number" id="count-number">—</span>
-    <span class="count-label" id="count-label">open DevTools to scan</span>
+    <span class="count-label" id="count-label">Click Scan page to begin</span>
   </div>
 
   <div class="actions-primary">
-    <button class="btn btn-scan" id="btn-scan">
-      <svg class="btn-icon" viewBox="0 0 16 16" fill="none"><path d="M13.65 2.35A8 8 0 1 0 16 8h-2a6 6 0 1 1-1.76-4.24L10 6h6V0l-2.35 2.35z" fill="currentColor"/></svg>
-      Scan page
+    <button class="btn btn-scan" id="btn-scan" aria-label="Scan current page for UI anti-patterns">
+      <!-- icon injected by JS so restoration is reliable -->
     </button>
-    <button class="btn btn-toggle" id="btn-toggle" title="Toggle overlays">
-      <svg class="btn-icon" viewBox="0 0 16 16" fill="none"><path d="M8 3C4.36 3 1.26 5.28 0 8.5c1.26 3.22 4.36 5.5 8 5.5s6.74-2.28 8-5.5C14.74 5.28 11.64 3 8 3zm0 9.17c-2.58 0-4.67-2.09-4.67-4.67S5.42 2.83 8 2.83s4.67 2.09 4.67 4.67S10.58 12.17 8 12.17zM8 5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z" fill="currentColor"/></svg>
+    <button class="btn btn-toggle" id="btn-toggle" aria-label="Toggle overlay visibility" title="Toggle overlays">
+      <svg class="btn-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path d="M8 3C4.36 3 1.26 5.28 0 8.5c1.26 3.22 4.36 5.5 8 5.5s6.74-2.28 8-5.5C14.74 5.28 11.64 3 8 3zm0 9.17c-2.58 0-4.67-2.09-4.67-4.67S5.42 2.83 8 2.83s4.67 2.09 4.67 4.67S10.58 12.17 8 12.17zM8 5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z" fill="currentColor"/>
+      </svg>
     </button>
   </div>
 
   <div class="divider"></div>
 
   <div class="actions-secondary">
-    <button class="btn btn-clone" id="btn-clone-page">
-      <svg class="btn-icon" viewBox="0 0 16 16" fill="none"><rect x="1" y="3" width="10" height="12" rx="1.5" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M5 1h9a1 1 0 0 1 1 1v11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    <button class="btn btn-clone" id="btn-clone-page" aria-label="Copy full page HTML to clipboard">
+      <svg class="btn-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <rect x="1" y="3" width="10" height="12" rx="1.5" stroke="currentColor" stroke-width="1.5" fill="none"/>
+        <path d="M5 1h9a1 1 0 0 1 1 1v11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
       Clone Page
+      <span class="btn-hint">Copies full HTML</span>
     </button>
-    <button class="btn btn-clone" id="btn-clone-component">
-      <svg class="btn-icon" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5" fill="none"/><rect x="8" y="8" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M8 5h4M5 8v4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    <button class="btn btn-clone btn-clone-comp-redirect" id="btn-clone-component" aria-label="Open DevTools to clone a selected component">
+      <svg class="btn-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <rect x="2" y="2" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5" fill="none"/>
+        <rect x="8" y="8" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5" fill="none"/>
+        <path d="M8 5h4M5 8v4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
       Clone Component
+      <span class="btn-hint">Select in DevTools first</span>
     </button>
   </div>
 
-  <div class="toast" id="toast"></div>
+  <!-- Toast sits outside flow so it doesn't push layout -->
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <script src="popup.js"></script>
 </body>

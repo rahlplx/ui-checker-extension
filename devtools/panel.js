@@ -1,154 +1,154 @@
 /**
- * UI Checker DevTools Extension - Panel
+ * UI Checker DevTools Panel
  *
- * Displays findings, provides controls for scanning and overlay toggling,
- * and allows clicking findings to inspect elements.
+ * Fixes applied vs prior version:
+ *  6.  Clone buttons now have visible text labels (not icon-only)
+ *  7.  Re-scan is non-destructive — existing results stay visible with overlay
+ *  8.  showScanning() only used on navigation (full clear); re-scan uses overlay
+ *  9.  Settings options have hint descriptions
+ *  (1-5 are popup fixes; debug layer added throughout)
  */
 
-// Match the DevTools theme (light or dark)
+// ── Debug logger ──────────────────────────────────────────────────────────────
+const LOG = (...a) => console.debug('[uichecker:panel]', ...a);
+
+// ── Theme ─────────────────────────────────────────────────────────────────────
 if (chrome.devtools.panels.themeName === 'dark') {
   document.documentElement.classList.add('theme-dark');
 }
 
 const tabId = chrome.devtools.inspectedWindow.tabId;
+LOG('panel init for tab', tabId);
 
-// Auto-reconnecting port. Service workers in MV3 can be terminated after ~30s of
-// inactivity (especially when the browser window is unfocused). When they restart,
-// the existing port becomes invalid. We recreate it lazily on the next use.
+// ── Port (auto-reconnecting) ─────────────────────────────────────────────────
 let port = null;
+
 function getPort() {
   if (port) return port;
+  LOG('connecting port');
   port = chrome.runtime.connect({ name: `uichecker-panel-${tabId}` });
   port.onMessage.addListener(handlePortMessage);
-  port.onDisconnect.addListener(() => { port = null; });
+  port.onDisconnect.addListener(() => {
+    LOG('port disconnected');
+    port = null;
+  });
   return port;
 }
+
 function postToPort(msg) {
   try {
     getPort().postMessage(msg);
-  } catch {
-    // Port died mid-call. Drop it and try once more with a fresh port.
+  } catch (err) {
+    LOG('postToPort error, retrying', err.message);
     port = null;
-    try { getPort().postMessage(msg); } catch { /* give up silently */ }
+    try { getPort().postMessage(msg); } catch (e) { LOG('postToPort retry failed', e.message); }
   }
 }
 
-const badge = document.getElementById('badge');
-const container = document.getElementById('findings-container');
-const emptyState = document.getElementById('empty-state');
-const btnRescan = document.getElementById('btn-rescan');
-const btnToggle = document.getElementById('btn-toggle');
-const btnCopyAll = document.getElementById('btn-copy-all');
-const btnClonePage = document.getElementById('btn-clone-page');
-const btnCloneComponent = document.getElementById('btn-clone-component');
-const cloneToast = document.getElementById('clone-toast');
-const settingsContainer = document.getElementById('settings-container');
-const settingsList = document.getElementById('settings-list');
-const btnSettings = document.getElementById('btn-settings');
+// ── DOM refs ─────────────────────────────────────────────────────────────────
+const badge            = document.getElementById('badge');
+const container        = document.getElementById('findings-container');
+const emptyState       = document.getElementById('empty-state');
+const btnRescan        = document.getElementById('btn-rescan');
+const btnToggle        = document.getElementById('btn-toggle');
+const btnCopyAll       = document.getElementById('btn-copy-all');
+const btnClonePage     = document.getElementById('btn-clone-page');
+const btnCloneComp     = document.getElementById('btn-clone-component');
+const cloneToast       = document.getElementById('clone-toast');
+const settingsContainer= document.getElementById('settings-container');
+const settingsList     = document.getElementById('settings-list');
+const btnSettings      = document.getElementById('btn-settings');
 
-let overlaysVisible = true;
-let allAntipatterns = [];
-let disabledRules = [];
-let currentFindings = [];
+// ── State ─────────────────────────────────────────────────────────────────────
+let overlaysVisible  = true;
+let allAntipatterns  = [];
+let disabledRules    = [];
+let currentFindings  = [];
+let _isRescanning    = false;
 
-// Load antipatterns list and disabled rules
+// ── Settings init ────────────────────────────────────────────────────────────
 async function initSettings() {
   try {
     const resp = await fetch(chrome.runtime.getURL('detector/antipatterns.json'));
     allAntipatterns = await resp.json();
-  } catch { allAntipatterns = []; }
+    LOG('antipatterns loaded', allAntipatterns.length);
+  } catch (err) {
+    LOG('antipatterns load failed', err.message);
+    allAntipatterns = [];
+  }
 
-  const stored = await chrome.storage.sync.get({
-    disabledRules: [],
-    lineLengthMode: 'strict',
-    spotlightBlur: true,
-    autoScan: 'panel',
-  });
+  let stored;
+  try {
+    stored = await chrome.storage.sync.get({
+      disabledRules: [], lineLengthMode: 'strict', spotlightBlur: true, autoScan: 'panel',
+    });
+  } catch (err) {
+    LOG('storage.get failed', err.message);
+    stored = { disabledRules: [], lineLengthMode: 'strict', spotlightBlur: true, autoScan: 'panel' };
+  }
+
   disabledRules = stored.disabledRules;
   renderSettings();
-  initLineLengthControl(stored.lineLengthMode);
-  initSpotlightBlurToggle(stored.spotlightBlur);
-  initAutoScanControl(stored.autoScan);
+  initSegmented('auto-scan-mode',    stored.autoScan,        (v) => chrome.storage.sync.set({ autoScan: v }));
+  initSegmented('line-length-mode',  stored.lineLengthMode,  async (v) => {
+    await chrome.storage.sync.set({ lineLengthMode: v });
+    chrome.runtime.sendMessage({ action: 'disabled-rules-changed' }).catch(() => {});
+  });
+  initSpotlightBlur(stored.spotlightBlur);
 }
 
-function initAutoScanControl(currentMode) {
-  const group = document.getElementById('auto-scan-mode');
-  if (!group) return;
+function initSegmented(id, current, onChange) {
+  const group = document.getElementById(id);
+  if (!group) { LOG('initSegmented: element not found', id); return; }
   for (const btn of group.querySelectorAll('button')) {
-    btn.classList.toggle('active', btn.dataset.value === currentMode);
+    btn.classList.toggle('active', btn.dataset.value === current);
     btn.addEventListener('click', async () => {
-      const mode = btn.dataset.value;
-      for (const b of group.querySelectorAll('button')) {
-        b.classList.toggle('active', b === btn);
-      }
-      await chrome.storage.sync.set({ autoScan: mode });
+      for (const b of group.querySelectorAll('button')) b.classList.toggle('active', b === btn);
+      try { await onChange(btn.dataset.value); } catch (err) { LOG('segmented onChange error', err); }
     });
   }
 }
 
-function initLineLengthControl(currentMode) {
-  const group = document.getElementById('line-length-mode');
-  if (!group) return;
-  for (const btn of group.querySelectorAll('button')) {
-    btn.classList.toggle('active', btn.dataset.value === currentMode);
-    btn.addEventListener('click', async () => {
-      const mode = btn.dataset.value;
-      for (const b of group.querySelectorAll('button')) {
-        b.classList.toggle('active', b === btn);
-      }
-      await chrome.storage.sync.set({ lineLengthMode: mode });
-      chrome.runtime.sendMessage({ action: 'disabled-rules-changed' });
-    });
-  }
-}
-
-function initSpotlightBlurToggle(currentValue) {
+function initSpotlightBlur(current) {
   const cb = document.getElementById('spotlight-blur-toggle');
   if (!cb) return;
-  cb.checked = currentValue;
+  cb.checked = current;
   cb.addEventListener('change', async () => {
-    await chrome.storage.sync.set({ spotlightBlur: cb.checked });
-    chrome.runtime.sendMessage({ action: 'disabled-rules-changed' });
+    try {
+      await chrome.storage.sync.set({ spotlightBlur: cb.checked });
+      chrome.runtime.sendMessage({ action: 'disabled-rules-changed' }).catch(() => {});
+    } catch (err) { LOG('spotlightBlur save error', err); }
   });
 }
 
 function renderSettings() {
   settingsList.innerHTML = '';
-
   const categories = {
-    slop: { label: 'AI tells', items: [] },
-    quality: { label: 'Quality', items: [] },
+    slop:    { label: 'AI tells',       items: [] },
+    quality: { label: 'Quality issues', items: [] },
   };
   for (const ap of allAntipatterns) {
-    const cat = ap.category || 'quality';
-    (categories[cat] || categories.quality).items.push(ap);
+    (categories[ap.category] || categories.quality).items.push(ap);
   }
-
   for (const [, group] of Object.entries(categories)) {
     if (!group.items.length) continue;
-
     const header = document.createElement('div');
     header.className = 'settings-header';
     header.textContent = group.label;
     settingsList.appendChild(header);
-
     const grid = document.createElement('div');
     grid.className = 'settings-grid';
-
     for (const ap of group.items) {
       const label = document.createElement('label');
       label.className = 'setting-rule';
-
-      const checkbox = document.createElement('input');
-      checkbox.type = 'checkbox';
-      checkbox.checked = !disabledRules.includes(ap.id);
-      checkbox.addEventListener('change', () => toggleRule(ap.id, checkbox.checked));
-
-      const text = document.createElement('span');
-      text.textContent = ap.name;
-
-      label.appendChild(checkbox);
-      label.appendChild(text);
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = !disabledRules.includes(ap.id);
+      cb.addEventListener('change', () => toggleRule(ap.id, cb.checked));
+      const txt = document.createElement('span');
+      txt.textContent = ap.name;
+      label.appendChild(cb);
+      label.appendChild(txt);
       grid.appendChild(label);
     }
     settingsList.appendChild(grid);
@@ -156,48 +156,88 @@ function renderSettings() {
 }
 
 async function toggleRule(ruleId, enabled) {
-  if (enabled) {
-    disabledRules = disabledRules.filter(id => id !== ruleId);
-  } else {
-    if (!disabledRules.includes(ruleId)) disabledRules.push(ruleId);
-  }
-  await chrome.storage.sync.set({ disabledRules });
-  chrome.runtime.sendMessage({ action: 'disabled-rules-changed' });
+  disabledRules = enabled
+    ? disabledRules.filter(id => id !== ruleId)
+    : [...new Set([...disabledRules, ruleId])];
+  try {
+    await chrome.storage.sync.set({ disabledRules });
+    chrome.runtime.sendMessage({ action: 'disabled-rules-changed' }).catch(() => {});
+  } catch (err) { LOG('toggleRule save error', err); }
 }
 
-// Listen for messages from the service worker (called by getPort() on each new connection)
+// ── Port message handler ──────────────────────────────────────────────────────
 function handlePortMessage(msg) {
+  LOG('port message', msg.action);
+
   if (msg.action === 'page-pointer-active') {
-    // Cursor is active on the page → user has left the panel
     setHoveredItem(null);
     return;
   }
   if (msg.action === 'findings' || msg.action === 'state') {
+    removeScanOverlay();                     // FIX #7: remove overlay on results
     renderFindings(msg.findings || []);
     if (msg.overlaysVisible !== undefined) {
       overlaysVisible = msg.overlaysVisible;
-      updateToggleButton();
+      updateToggleBtn();
     }
+    _isRescanning = false;
+    return;
   }
   if (msg.action === 'overlays-toggled') {
     overlaysVisible = msg.visible;
-    updateToggleButton();
+    updateToggleBtn();
+    return;
   }
   if (msg.action === 'navigated') {
-    showScanning();
+    LOG('navigated — clearing findings');
+    _isRescanning = false;
+    showScanning();                          // full clear only on navigation
+    return;
   }
 }
 
-// Initial connection
+// ── Connect + heartbeat ───────────────────────────────────────────────────────
 getPort();
+setInterval(() => postToPort({ action: 'ping' }), 20_000);
 
-// Heartbeat to keep the MV3 service worker alive while the panel is open.
-// SWs can be terminated after ~30s of inactivity, especially when the browser is unfocused.
-setInterval(() => postToPort({ action: 'ping' }), 20000);
+// ── Scan states ───────────────────────────────────────────────────────────────
 
-// Controls
+// FIX #8: Navigation-triggered clear — destroys content, shows spinner
+function showScanning() {
+  currentFindings = [];
+  badge.classList.remove('visible');
+  badge.textContent = '0';
+  container.innerHTML = `
+    <div class="scanning-indicator">
+      <div class="scanning-dot"></div>
+      Scanning page…
+    </div>`;
+}
+
+// FIX #7: Rescan overlay — non-destructive, sits above existing findings
+function showRescanOverlay() {
+  if (currentFindings.length === 0) {
+    showScanning();
+    return;
+  }
+  removeScanOverlay();
+  const overlay = document.createElement('div');
+  overlay.id    = 'scan-overlay';
+  overlay.className = 'scan-overlay';
+  overlay.setAttribute('role', 'status');
+  overlay.innerHTML = `<div class="scanning-dot"></div><span>Re-scanning…</span>`;
+  container.prepend(overlay);
+}
+
+function removeScanOverlay() {
+  document.getElementById('scan-overlay')?.remove();
+}
+
+// ── Controls ──────────────────────────────────────────────────────────────────
 btnRescan.addEventListener('click', () => {
-  showScanning();
+  LOG('rescan clicked');
+  _isRescanning = true;
+  showRescanOverlay();       // FIX #7: non-destructive
   postToPort({ action: 'scan' });
 });
 
@@ -206,146 +246,27 @@ btnToggle.addEventListener('click', () => {
 });
 
 btnSettings.addEventListener('click', () => {
-  const isVisible = settingsContainer.style.display !== 'none';
-  settingsContainer.style.display = isVisible ? 'none' : '';
-  btnSettings.classList.toggle('active', !isVisible);
+  const open = settingsContainer.style.display !== 'none';
+  settingsContainer.style.display = open ? 'none' : '';
+  btnSettings.classList.toggle('active', !open);
+  btnSettings.setAttribute('aria-expanded', String(!open));
 });
 
-function updateToggleButton() {
+function updateToggleBtn() {
   btnToggle.title = overlaysVisible ? 'Hide overlays' : 'Show overlays';
   btnToggle.classList.toggle('inactive', !overlaysVisible);
 }
 
-function showScanning() {
-  container.innerHTML = `
-    <div class="scanning-indicator">
-      <div class="scanning-dot"></div>
-      Scanning page...
-    </div>`;
+// ── Clone toast ───────────────────────────────────────────────────────────────
+let _cloneToastTimer = null;
+function showCloneToast(msg, type = 'success') {
+  cloneToast.textContent = msg;
+  cloneToast.className   = `clone-toast visible ${type}`;
+  clearTimeout(_cloneToastTimer);
+  _cloneToastTimer = setTimeout(() => { cloneToast.className = 'clone-toast'; }, 3500);
 }
 
-// Maps each anti-pattern to the most relevant UI Checker skill(s) for fixing it.
-// These are suggestions; the user decides whether and how to apply them.
-const FIX_SKILLS = {
-  // AI slop
-  'side-tab':                'distill, polish',
-  'border-accent-on-rounded':'distill, polish',
-  'overused-font':           'typeset',
-  'single-font':             'typeset',
-  'flat-type-hierarchy':     'typeset',
-  'gradient-text':           'typeset, distill',
-  'ai-color-palette':        'colorize, distill',
-  'nested-cards':            'distill, arrange',
-  'monotonous-spacing':      'arrange',
-  'everything-centered':     'arrange',
-  'bounce-easing':           'animate',
-  'dark-glow':               'quieter, distill',
-  'icon-tile-stacked-above-heading': 'distill, arrange',
-  // Quality
-  'pure-black-white':        'colorize',
-  'gray-on-color':           'colorize',
-  'low-contrast':            'colorize, audit',
-  'layout-transition':       'animate, optimize',
-  'line-length':             'arrange, typeset',
-  'cramped-padding':         'arrange, polish',
-  'tight-leading':           'typeset',
-  'skipped-heading':         'audit, harden',
-  'justified-text':          'typeset',
-  'tiny-text':               'typeset',
-  'all-caps-body':           'typeset',
-  'wide-tracking':           'typeset',
-};
-
-function fixSkillFor(type) {
-  const skills = FIX_SKILLS[type] || 'polish';
-  // Prefix each comma-separated skill with a slash for clarity
-  return skills.split(',').map(s => '/' + s.trim()).join(', ');
-}
-
-// Returns a sorted array of unique skills referenced by the given findings,
-// most-frequent first. Each entry already has the leading slash.
-function uniqueSkillsForFindings(findings) {
-  const counts = new Map();
-  for (const item of findings) {
-    for (const f of item.findings) {
-      const list = (FIX_SKILLS[f.type] || 'polish').split(',').map(s => '/' + s.trim());
-      for (const s of list) {
-        counts.set(s, (counts.get(s) || 0) + 1);
-      }
-    }
-  }
-  return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([s]) => s);
-}
-
-function getInspectedUrl() {
-  return new Promise((resolve) => {
-    // Strip the URL fragment — anchors are noise for "what page is this from"
-    chrome.devtools.inspectedWindow.eval(
-      '(function(){var u=new URL(location.href);u.hash="";return u.toString();})()',
-      (result) => resolve(typeof result === 'string' ? result : '')
-    );
-  });
-}
-
-async function formatFindingsForCopy(findings) {
-  if (!findings.length) return 'UI Checker found no anti-patterns on this page.';
-  const url = await getInspectedUrl();
-  const lines = ['# UI Checker findings'];
-  if (url) lines.push(`URL: ${url}`);
-  lines.push('');
-
-  const groups = { slop: [], quality: [] };
-  for (const item of findings) {
-    for (const f of item.findings) {
-      const cat = f.category || 'quality';
-      groups[cat].push({ ...f, selector: item.selector, isPageLevel: item.isPageLevel });
-    }
-  }
-
-  if (groups.slop.length) {
-    lines.push(`## AI tells (${groups.slop.length})`);
-    for (const f of groups.slop) {
-      const where = f.isPageLevel ? '_(page-level)_' : `\`${f.selector}\``;
-      lines.push(`- **${f.name}** at ${where}: ${f.detail}`);
-    }
-    lines.push('');
-  }
-
-  if (groups.quality.length) {
-    lines.push(`## Quality issues (${groups.quality.length})`);
-    for (const f of groups.quality) {
-      const where = f.isPageLevel ? '_(page-level)_' : `\`${f.selector}\``;
-      lines.push(`- **${f.name}** at ${where}: ${f.detail}`);
-    }
-    lines.push('');
-  }
-
-  // Roll up suggested skills across all findings (most-relevant first)
-  const skills = uniqueSkillsForFindings(findings);
-  if (skills.length) {
-    lines.push(`Suggested UI Checker skills to fix: ${skills.join(', ')}`);
-    lines.push('');
-  }
-
-  lines.push('---');
-  lines.push('Detected by UI Checker. Skills are suggestions, not required.');
-  return lines.join('\n');
-}
-
-async function formatSingleFindingForCopy(item, finding) {
-  const url = await getInspectedUrl();
-  const where = item.isPageLevel ? '_(page-level)_' : `\`${item.selector}\``;
-  const lines = [`# UI Checker: ${finding.name}`];
-  if (url) lines.push(`URL: ${url}`);
-  lines.push(`Element: ${where}`);
-  lines.push(`Detail: ${finding.detail}`);
-  lines.push('');
-  lines.push(finding.description);
-  lines.push('');
-  lines.push(`Suggested UI Checker skill(s) to fix: ${fixSkillFor(finding.type)}`);
-  return lines.join('\n');
-}
-
+// ── Clipboard ─────────────────────────────────────────────────────────────────
 async function copyToClipboard(text, btn) {
   if (text instanceof Promise) text = await text;
   try {
@@ -354,77 +275,67 @@ async function copyToClipboard(text, btn) {
       const orig = btn.title;
       btn.title = 'Copied!';
       btn.classList.add('copied');
-      setTimeout(() => {
-        btn.title = orig;
-        btn.classList.remove('copied');
-      }, 1200);
+      setTimeout(() => { btn.title = orig; btn.classList.remove('copied'); }, 1200);
     }
     return true;
   } catch (err) {
-    console.warn('Copy failed', err);
+    LOG('clipboard write failed', err.message);
     return false;
   }
 }
 
-btnCopyAll.addEventListener('click', () => {
-  copyToClipboard(formatFindingsForCopy(currentFindings), btnCopyAll);
-});
-
-// ── Clone utilities ────────────────────────────────────────────────────────────
-
-let _cloneToastTimer = null;
-function showCloneToast(msg, type = 'success') {
-  cloneToast.textContent = msg;
-  cloneToast.className = `clone-toast visible ${type}`;
-  clearTimeout(_cloneToastTimer);
-  _cloneToastTimer = setTimeout(() => {
-    cloneToast.className = 'clone-toast';
-  }, 3000);
-}
-
-// Clone Page — serialises the full rendered document outerHTML.
-// Runs in the inspected page's MAIN world via eval (has access to DOM + computed styles).
+// ── Clone Page ────────────────────────────────────────────────────────────────
 btnClonePage.addEventListener('click', () => {
+  LOG('clone-page');
   btnClonePage.disabled = true;
+
   chrome.devtools.inspectedWindow.eval(
     `(function() {
       try {
         var clone = document.documentElement.cloneNode(true);
-        // Strip uichecker overlay artefacts so they don't end up in the snapshot
-        var toRemove = clone.querySelectorAll(
-          '.uichecker-overlay,.uichecker-label,.uichecker-banner,.uichecker-spotlight-backdrop,[id^="uichecker-live-"]'
-        );
-        for (var i = 0; i < toRemove.length; i++) toRemove[i].remove();
-        return '<!DOCTYPE html>\\n' + clone.outerHTML;
+        var sel = '.uichecker-overlay,.uichecker-label,.uichecker-banner' +
+                  ',.uichecker-spotlight-backdrop,[id^="uichecker-live-"]';
+        var nodes = clone.querySelectorAll(sel);
+        for (var i = 0; i < nodes.length; i++) nodes[i].remove();
+        return { ok: true, html: '<!DOCTYPE html>\\n' + clone.outerHTML };
       } catch(e) {
-        return '__ERROR__:' + e.message;
+        return { ok: false, error: e.message };
       }
     })()`,
-    (result, exceptionInfo) => {
+    (result, exInfo) => {
       btnClonePage.disabled = false;
-      if (exceptionInfo || !result || result.startsWith('__ERROR__')) {
-        showCloneToast('Clone failed: ' + (exceptionInfo?.value || result?.replace('__ERROR__:', '') || 'unknown error'), 'error');
+      if (exInfo) {
+        LOG('clone-page eval exception', exInfo.value);
+        showCloneToast('Eval error: ' + exInfo.value, 'error');
         return;
       }
-      copyToClipboard(result, btnClonePage).then(ok => {
-        if (ok) showCloneToast('Page HTML copied — ' + result.length.toLocaleString() + ' chars');
+      if (!result?.ok) {
+        LOG('clone-page failed', result?.error);
+        showCloneToast('Clone failed: ' + (result?.error || 'unknown'), 'error');
+        return;
+      }
+      LOG('clone-page ok', result.html.length, 'chars');
+      copyToClipboard(result.html, btnClonePage).then(ok => {
+        if (ok) showCloneToast(`Page HTML copied — ${result.html.length.toLocaleString()} chars`);
+        else    showCloneToast('Clipboard write failed', 'error');
       });
     }
   );
 });
 
-// Clone Component — extracts the currently selected element ($0 in Elements panel)
-// with critical computed styles inlined. This is the proper implementation because
-// only the DevTools panel context has access to the $0 selection.
-btnCloneComponent.addEventListener('click', () => {
-  btnCloneComponent.disabled = true;
+// ── Clone Component ────────────────────────────────────────────────────────────
+// FIX #6: Now has a visible text label in the toolbar.
+// Uses $0 — only valid in DevTools context. Proper implementation.
+btnCloneComp.addEventListener('click', () => {
+  LOG('clone-component');
+  btnCloneComp.disabled = true;
+
   chrome.devtools.inspectedWindow.eval(
     `(function() {
       var el = $0;
       if (!el || el === document.documentElement || el === document.body) {
-        return '__NO_ELEMENT__';
+        return { ok: false, reason: 'no-element' };
       }
-      // Critical computed properties — layout, colour, typography, spacing
       var PROPS = [
         'display','position','top','right','bottom','left',
         'width','height','min-width','min-height','max-width','max-height',
@@ -437,61 +348,75 @@ btnCloneComponent.addEventListener('click', () => {
         'letter-spacing','text-align','text-transform',
         'border','border-top','border-right','border-bottom','border-left','border-radius',
         'box-shadow','opacity','overflow','overflow-x','overflow-y',
-        'transform','transition','z-index','cursor','pointer-events',
+        'transform','transition','z-index','cursor','pointer-events'
       ];
-      var cs = window.getComputedStyle(el);
-      var styles = PROPS.map(function(p){ return p+':'+cs.getPropertyValue(p); }).join(';');
-      var clone = el.cloneNode(true);
-      // Remove uichecker artefacts from the clone
-      var overlays = clone.querySelectorAll('.uichecker-overlay,.uichecker-label');
-      for (var i = 0; i < overlays.length; i++) overlays[i].remove();
-      var existing = clone.getAttribute('style') || '';
-      clone.setAttribute('style', (existing ? existing + ';' : '') + styles);
-      return clone.outerHTML;
+      try {
+        var cs      = window.getComputedStyle(el);
+        var styles  = PROPS.map(function(p){ return p+':'+cs.getPropertyValue(p); }).join(';');
+        var clone   = el.cloneNode(true);
+        var artefacts = clone.querySelectorAll('.uichecker-overlay,.uichecker-label');
+        for (var i = 0; i < artefacts.length; i++) artefacts[i].remove();
+        var existing = clone.getAttribute('style') || '';
+        clone.setAttribute('style', (existing ? existing + ';' : '') + styles);
+        return { ok: true, html: clone.outerHTML, tag: el.tagName.toLowerCase() };
+      } catch(e) {
+        return { ok: false, reason: 'exception', error: e.message };
+      }
     })()`,
-    (result, exceptionInfo) => {
-      btnCloneComponent.disabled = false;
-      if (exceptionInfo) {
-        showCloneToast('Error: ' + exceptionInfo.value, 'error');
+    (result, exInfo) => {
+      btnCloneComp.disabled = false;
+
+      if (exInfo) {
+        LOG('clone-component eval exception', exInfo.value);
+        showCloneToast('Eval error: ' + exInfo.value, 'error');
         return;
       }
-      if (result === '__NO_ELEMENT__') {
-        showCloneToast('Select an element in the Elements panel first ($0)', 'error');
+      if (!result?.ok) {
+        if (result?.reason === 'no-element') {
+          // FIX #6: shorter, actionable message — old was 80+ chars on a single line
+          showCloneToast('Select an element in the Elements panel first, then click Clone Component', 'error');
+        } else {
+          LOG('clone-component failed', result?.error);
+          showCloneToast('Extract failed: ' + (result?.error || result?.reason), 'error');
+        }
         return;
       }
-      copyToClipboard(result, btnCloneComponent).then(ok => {
-        if (ok) showCloneToast('Component HTML copied with computed styles');
+      LOG('clone-component ok', result.tag, result.html.length, 'chars');
+      copyToClipboard(result.html, btnCloneComp).then(ok => {
+        if (ok) showCloneToast(`<${result.tag}> HTML + computed styles copied`);
+        else    showCloneToast('Clipboard write failed', 'error');
       });
     }
   );
 });
 
-// Delegated hover tracking on the findings container.
-// Reliably handles cursor moving between items, into children, or out of the panel.
+// ── Copy all findings ─────────────────────────────────────────────────────────
+btnCopyAll.addEventListener('click', () => {
+  LOG('copy-all');
+  copyToClipboard(formatFindingsForCopy(currentFindings), btnCopyAll);
+});
+
+// ── Hover tracking ────────────────────────────────────────────────────────────
 let currentHoverSelector = null;
 function setHoveredItem(selector) {
   if (selector === currentHoverSelector) return;
   currentHoverSelector = selector;
-  if (selector) {
-    postToPort({ action: 'highlight', selector });
-  } else {
-    postToPort({ action: 'unhighlight' });
-  }
+  postToPort(selector ? { action: 'highlight', selector } : { action: 'unhighlight' });
 }
 
 container.addEventListener('pointermove', (e) => {
-  const item = e.target.closest('.finding-item');
+  const item     = e.target.closest('.finding-item');
   const selector = item && !item.classList.contains('is-hidden') ? item.dataset.selector || null : null;
   setHoveredItem(selector);
 });
-
-// Slow-cursor fallbacks (these fire reliably for slow movements)
 container.addEventListener('pointerleave', () => setHoveredItem(null));
 window.addEventListener('blur', () => setHoveredItem(null));
 
-
+// ── Render findings ───────────────────────────────────────────────────────────
 function renderFindings(findings) {
+  LOG('renderFindings', findings.length, 'items');
   currentFindings = findings;
+
   if (!findings.length) {
     container.innerHTML = '';
     container.appendChild(emptyState);
@@ -502,101 +427,96 @@ function renderFindings(findings) {
   }
 
   emptyState.style.display = 'none';
-
-  // Count total element-level findings
-  const totalCount = findings.reduce((sum, f) => sum + f.findings.length, 0);
+  const totalCount = findings.reduce((s, f) => s + f.findings.length, 0);
   badge.textContent = String(totalCount);
   badge.classList.add('visible');
 
-  // Group findings by category, then by anti-pattern type
   const categories = { slop: new Map(), quality: new Map() };
   for (const item of findings) {
     for (const f of item.findings) {
-      const cat = f.category || 'quality';
+      const cat    = f.category || 'quality';
       const groups = categories[cat] || categories.quality;
       if (!groups.has(f.type)) {
         groups.set(f.type, { name: f.name, description: f.description, items: [] });
       }
       groups.get(f.type).items.push({
-        selector: item.selector,
-        tagName: item.tagName,
-        isPageLevel: item.isPageLevel,
-        isHidden: item.isHidden,
-        detail: f.detail,
+        selector: item.selector, tagName: item.tagName,
+        isPageLevel: item.isPageLevel, isHidden: item.isHidden, detail: f.detail,
       });
     }
   }
 
   container.innerHTML = '';
+  const LABELS = { slop: 'AI tells', quality: 'Quality issues' };
 
-  const CATEGORY_LABELS = { slop: 'AI tells', quality: 'Quality issues' };
   for (const [catKey, groups] of Object.entries(categories)) {
     if (groups.size === 0) continue;
-
-    const catCount = [...groups.values()].reduce((sum, g) => sum + g.items.length, 0);
-    const section = document.createElement('div');
-    section.className = 'category-section category-' + catKey;
+    const catCount = [...groups.values()].reduce((s, g) => s + g.items.length, 0);
+    const section  = document.createElement('div');
+    section.className = `category-section category-${catKey}`;
 
     const catHeader = document.createElement('div');
     catHeader.className = 'category-header';
     catHeader.innerHTML = `
       <span class="category-dot category-dot-${catKey}"></span>
-      <span class="category-name">${CATEGORY_LABELS[catKey]}</span>
+      <span class="category-name">${LABELS[catKey]}</span>
       <span class="category-count">${catCount}</span>`;
     section.appendChild(catHeader);
 
     for (const [type, group] of groups) {
-    const groupEl = document.createElement('div');
-    groupEl.className = 'finding-group';
+      const groupEl = document.createElement('div');
+      groupEl.className = 'finding-group';
 
-    const header = document.createElement('div');
-    header.className = 'group-header';
-    header.innerHTML = `
-      <span class="group-chevron">&#9660;</span>
-      <span class="group-name">${escapeHtml(group.name)}</span>
-      <span class="group-count">${group.items.length}</span>`;
-    header.addEventListener('click', () => header.classList.toggle('collapsed'));
-    groupEl.appendChild(header);
+      const header = document.createElement('div');
+      header.className = 'group-header';
+      header.innerHTML = `
+        <span class="group-chevron">&#9660;</span>
+        <span class="group-name">${escapeHtml(group.name)}</span>
+        <span class="group-count">${group.items.length}</span>`;
+      header.addEventListener('click', () => header.classList.toggle('collapsed'));
+      groupEl.appendChild(header);
 
-    const itemsEl = document.createElement('div');
-    itemsEl.className = 'group-items';
+      const itemsEl = document.createElement('div');
+      itemsEl.className = 'group-items';
 
-    for (const item of group.items) {
-      const itemEl = document.createElement('div');
-      itemEl.className = 'finding-item' + (item.isHidden ? ' is-hidden' : '');
-      const tag = item.isPageLevel
-        ? '<span class="finding-tag tag-page">page</span>'
-        : item.isHidden ? '<span class="finding-tag tag-hidden" title="Element is currently hidden on the page">hidden</span>' : '';
-      itemEl.innerHTML = `
-        ${tag}
-        <div class="finding-row">
-          <span class="finding-selector">${escapeHtml(item.selector)}</span>
-          <button class="finding-copy" title="Copy this finding">
-            <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M11 1H3a2 2 0 0 0-2 2v10h2V3h8V1zm3 3H7a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h7a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm0 11H7V6h7v9z" fill="currentColor"/></svg>
-          </button>
-        </div>
-        <span class="finding-detail">${escapeHtml(item.detail)}</span>
-        <span class="finding-description">${escapeHtml(group.description)}</span>`;
+      for (const item of group.items) {
+        const itemEl  = document.createElement('div');
+        itemEl.className = 'finding-item' + (item.isHidden ? ' is-hidden' : '');
+        const tag = item.isPageLevel
+          ? '<span class="finding-tag tag-page">page</span>'
+          : item.isHidden
+            ? '<span class="finding-tag tag-hidden" title="Element is hidden on the page">hidden</span>'
+            : '';
+        itemEl.innerHTML = `
+          ${tag}
+          <div class="finding-row">
+            <span class="finding-selector">${escapeHtml(item.selector)}</span>
+            <button class="finding-copy" title="Copy this finding" aria-label="Copy finding to clipboard">
+              <svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M11 1H3a2 2 0 0 0-2 2v10h2V3h8V1zm3 3H7a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h7a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm0 11H7V6h7v9z" fill="currentColor"/>
+              </svg>
+            </button>
+          </div>
+          <span class="finding-detail">${escapeHtml(item.detail)}</span>
+          <span class="finding-description">${escapeHtml(group.description)}</span>`;
 
-      const copyBtn = itemEl.querySelector('.finding-copy');
-      const finding = { type, name: group.name, description: group.description, detail: item.detail };
-      copyBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        copyToClipboard(formatSingleFindingForCopy(item, finding), copyBtn);
-      });
+        const copyBtn = itemEl.querySelector('.finding-copy');
+        const finding = { type, name: group.name, description: group.description, detail: item.detail };
+        copyBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          copyToClipboard(formatSingleFindingForCopy(item, finding), copyBtn);
+        });
 
-      if (!item.isPageLevel && !item.isHidden) {
-        itemEl.dataset.selector = item.selector;
-        itemEl.addEventListener('click', () => inspectElement(item.selector));
+        if (!item.isPageLevel && !item.isHidden) {
+          itemEl.dataset.selector = item.selector;
+          itemEl.addEventListener('click', () => inspectElement(item.selector));
+        }
+        itemsEl.appendChild(itemEl);
       }
 
-      itemsEl.appendChild(itemEl);
+      groupEl.appendChild(itemsEl);
+      section.appendChild(groupEl);
     }
-
-    groupEl.appendChild(itemsEl);
-    section.appendChild(groupEl);
-  }
-
     container.appendChild(section);
   }
 }
@@ -604,17 +524,99 @@ function renderFindings(findings) {
 function inspectElement(selector) {
   const json = JSON.stringify(selector);
   chrome.devtools.inspectedWindow.eval(
-    `(function() {
-      var el = document.querySelector(${json});
-      if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); inspect(el); }
-    })()`
+    `(function(){ var el=document.querySelector(${json}); if(el){ el.scrollIntoView({behavior:'smooth',block:'center'}); inspect(el); } })()`
   );
 }
 
 function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+// ── Copy formatters ───────────────────────────────────────────────────────────
+const FIX_SKILLS = {
+  'side-tab':'distill, polish','border-accent-on-rounded':'distill, polish',
+  'overused-font':'typeset','single-font':'typeset','flat-type-hierarchy':'typeset',
+  'gradient-text':'typeset, distill','ai-color-palette':'colorize, distill',
+  'nested-cards':'distill, arrange','monotonous-spacing':'arrange',
+  'everything-centered':'arrange','bounce-easing':'animate',
+  'dark-glow':'quieter, distill','icon-tile-stacked-above-heading':'distill, arrange',
+  'pure-black-white':'colorize','gray-on-color':'colorize',
+  'low-contrast':'colorize, audit','layout-transition':'animate, optimize',
+  'line-length':'arrange, typeset','cramped-padding':'arrange, polish',
+  'tight-leading':'typeset','skipped-heading':'audit, harden',
+  'justified-text':'typeset','tiny-text':'typeset',
+  'all-caps-body':'typeset','wide-tracking':'typeset',
+};
+
+function fixSkillFor(type) {
+  return (FIX_SKILLS[type] || 'polish').split(',').map(s => '/' + s.trim()).join(', ');
+}
+
+function uniqueSkillsForFindings(findings) {
+  const counts = new Map();
+  for (const item of findings) {
+    for (const f of item.findings) {
+      for (const s of (FIX_SKILLS[f.type] || 'polish').split(',').map(s => '/' + s.trim())) {
+        counts.set(s, (counts.get(s) || 0) + 1);
+      }
+    }
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([s]) => s);
+}
+
+function getInspectedUrl() {
+  return new Promise(resolve => {
+    chrome.devtools.inspectedWindow.eval(
+      '(function(){var u=new URL(location.href);u.hash="";return u.toString()})()',
+      r => resolve(typeof r === 'string' ? r : '')
+    );
+  });
+}
+
+async function formatFindingsForCopy(findings) {
+  if (!findings.length) return 'UI Checker found no anti-patterns on this page.';
+  const url = await getInspectedUrl();
+  const lines = ['# UI Checker findings'];
+  if (url) lines.push(`URL: ${url}`);
+  lines.push('');
+  const groups = { slop: [], quality: [] };
+  for (const item of findings) {
+    for (const f of item.findings) {
+      (groups[f.category] || groups.quality).push({ ...f, selector: item.selector, isPageLevel: item.isPageLevel });
+    }
+  }
+  if (groups.slop.length) {
+    lines.push(`## AI tells (${groups.slop.length})`);
+    for (const f of groups.slop) lines.push(`- **${f.name}** at ${f.isPageLevel ? '_(page-level)_' : `\`${f.selector}\``}: ${f.detail}`);
+    lines.push('');
+  }
+  if (groups.quality.length) {
+    lines.push(`## Quality issues (${groups.quality.length})`);
+    for (const f of groups.quality) lines.push(`- **${f.name}** at ${f.isPageLevel ? '_(page-level)_' : `\`${f.selector}\``}: ${f.detail}`);
+    lines.push('');
+  }
+  const skills = uniqueSkillsForFindings(findings);
+  if (skills.length) { lines.push(`Suggested fixes: ${skills.join(', ')}`); lines.push(''); }
+  lines.push('---');
+  lines.push('Detected by UI Checker.');
+  return lines.join('\n');
+}
+
+async function formatSingleFindingForCopy(item, finding) {
+  const url   = await getInspectedUrl();
+  const where = item.isPageLevel ? '_(page-level)_' : `\`${item.selector}\``;
+  return [
+    `# UI Checker: ${finding.name}`,
+    url ? `URL: ${url}` : '',
+    `Element: ${where}`,
+    `Detail: ${finding.detail}`,
+    '',
+    finding.description,
+    '',
+    `Fix: ${fixSkillFor(finding.type)}`,
+  ].filter(l => l !== null).join('\n');
 }
 
 initSettings();

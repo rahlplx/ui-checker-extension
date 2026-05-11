@@ -5,9 +5,24 @@
   <link rel="stylesheet" href="sidebar.css">
 </head>
 <body>
+  <!-- Clone Component button — always visible; enabled only when findings exist for $0 -->
+  <div class="sidebar-actions" id="sidebar-actions" style="display:none">
+    <button class="sidebar-clone-btn" id="sidebar-clone-btn"
+            title="Copy selected element HTML with computed styles">
+      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <rect x="1" y="1" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5" fill="none"/>
+        <rect x="8" y="8" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5" fill="none"/>
+        <path d="M8 4.5h4M4.5 8v4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+      Clone Component
+    </button>
+    <div class="sidebar-clone-toast" id="sidebar-clone-toast" role="status" aria-live="polite"></div>
+  </div>
+
   <div id="sidebar-content">
     <div class="state">Select an element to see UI Checker findings.</div>
   </div>
+
   <script src="sidebar.js"></script>
 </body>
 </html>

@@ -5,6 +5,9 @@
  * Maintains per-tab state and updates the badge.
  */
 
+// ── Debug logger ──────────────────────────────────────────────────────────────
+const LOG = (...a) => console.debug('[uichecker:sw]', ...a);
+
 // Per-tab state: { tabId: { findings, overlaysVisible, injected } }
 const tabState = new Map();
 
@@ -58,7 +61,7 @@ async function buildScanConfig() {
 // engages with the extension (DevTools panel/sidebar opened, popup scan, etc).
 async function ensureContentScriptInjected(tabId) {
   const state = getState(tabId);
-  if (state.csInjected) return true;
+  if (state.csInjected) { LOG('cs already injected for tab', tabId); return true; }
   try {
     await chrome.scripting.executeScript({
       target: { tabId },
@@ -66,18 +69,22 @@ async function ensureContentScriptInjected(tabId) {
       injectImmediately: true,
     });
     state.csInjected = true;
+    LOG('cs injected for tab', tabId);
     return true;
   } catch (err) {
-    // Common cause: chrome:// pages, the web store, or other restricted URLs
+    LOG('cs injection failed for tab', tabId, err.message);
     return false;
   }
 }
 
 async function sendScanToTab(tabId) {
+  LOG('sendScanToTab', tabId);
   const ok = await ensureContentScriptInjected(tabId);
-  if (!ok) return;
+  if (!ok) { LOG('scan aborted — restricted tab', tabId); return; }
   const config = await buildScanConfig();
-  chrome.tabs.sendMessage(tabId, { action: 'scan', config }).catch(() => {});
+  chrome.tabs.sendMessage(tabId, { action: 'scan', config }).catch(err => {
+    LOG('sendMessage(scan) failed for tab', tabId, err.message);
+  });
 }
 
 // Handle messages from content scripts and popup
@@ -88,9 +95,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const state = getState(tabId);
     state.findings = msg.findings || [];
     state.injected = true;
+    LOG('findings received for tab', tabId, state.findings.length, 'items');
     updateBadge(tabId);
     notifyPanels(tabId, { action: 'findings', findings: state.findings });
-    // Broadcast for popup
     chrome.runtime.sendMessage({ action: 'findings-updated', tabId, findings: state.findings }).catch(() => {});
     sendResponse({ ok: true });
   }

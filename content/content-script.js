@@ -14,12 +14,17 @@
   if (window.__UICHECKER_CS_LOADED__) return;
   window.__UICHECKER_CS_LOADED__ = true;
 
-  let injected = false;
+  // ── Debug logger ────────────────────────────────────────────────────────────
+  const LOG = (...a) => console.debug('[uichecker:cs]', ...a);
+  LOG('content script loaded on', location.href);
+
+  let injected    = false;
   let pendingScan = false;
-  let scanConfig = null;
+  let scanConfig  = null;
 
   // Listen for commands from the service worker
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    LOG('onMessage', msg.action);
     if (msg.action === 'scan') {
       scanConfig = msg.config || null;
       injectAndScan();
@@ -61,6 +66,7 @@
     }
 
     if (e.data.source === 'uichecker-ready') {
+      LOG('detector ready; pendingScan=', pendingScan);
       injected = true;
       if (pendingScan) {
         pendingScan = false;
@@ -102,16 +108,12 @@
 
   function injectAndScan() {
     if (injected) {
+      LOG('detector already injected, sending scan command');
       sendScanCommand();
       return;
     }
 
-    // Probe first: if the detector is already alive in the page (e.g., SW restart reset
-    // our `injected` flag but the page context still has the detector running), it will
-    // respond with `uichecker-ready` and we'll scan without re-injecting.
-    // If no response arrives within 120ms, request SW-based injection which bypasses
-    // the browser's script-URL cache (unlike <script src="..."> tags which don't re-execute
-    // the same URL in the same document).
+    LOG('injected=false; probing detector before re-injection');
     pendingScan = true;
     document.documentElement.dataset.uicheckerExtension = 'true';
 
@@ -120,7 +122,7 @@
 
     setTimeout(() => {
       if (!probeAnswered && pendingScan) {
-        // Detector didn't respond — request SW to inject via chrome.scripting (always fresh)
+        LOG('probe timeout — requesting SW injection');
         chrome.runtime.sendMessage({ action: 'inject-fallback' });
       }
     }, 120);

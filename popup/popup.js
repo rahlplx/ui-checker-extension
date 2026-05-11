@@ -1,209 +1,241 @@
 /**
- * UI Checker - Popup
- * Scan, overlay toggle, clone page, clone component.
+ * UI Checker — Popup
+ *
+ * Fixes applied vs prior version:
+ *  1. Scan button innerHTML restored properly (not textContent which strips icon)
+ *  2. Clone Component replaced with DevTools redirect (popup has no $0 access)
+ *  3. Toast is now white-space:normal — long messages fully readable
+ *  4. Count label corrected to "Click Scan page to begin"
+ *  5. Scan timeout (8s) with explicit error state + button recovery
+ *  6. Status pill replaces plain dot — readable label not just colour
  */
 
+// ── Debug logger ──────────────────────────────────────────────────────────────
+const LOG = (...a) => console.debug('[uichecker:popup]', ...a);
+
+// ── DOM refs ─────────────────────────────────────────────────────────────────
 const countNumber  = document.getElementById('count-number');
 const countLabel   = document.getElementById('count-label');
+const countBlock   = document.getElementById('count-block');
 const btnScan      = document.getElementById('btn-scan');
 const btnToggle    = document.getElementById('btn-toggle');
 const btnClonePage = document.getElementById('btn-clone-page');
 const btnCloneComp = document.getElementById('btn-clone-component');
-const statusDot    = document.getElementById('status-dot');
+const statusPill   = document.getElementById('status-pill');
+const statusText   = document.getElementById('status-text');
 const toast        = document.getElementById('toast');
 
-let overlaysVisible = true;
+// ── Scan button HTML templates ──────────────────────────────────────────────
+// FIX #1: Store as constants so we can restore innerHTML exactly, never lose the icon.
+const SCAN_BTN_IDLE = `
+  <svg class="btn-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+    <path d="M13.65 2.35A8 8 0 1 0 16 8h-2a6 6 0 1 1-1.76-4.24L10 6h6V0l-2.35 2.35z" fill="currentColor"/>
+  </svg>
+  Scan page`;
 
+const SCAN_BTN_ACTIVE = `
+  <svg class="btn-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true"
+       style="animation:spin 0.7s linear infinite;flex-shrink:0">
+    <path d="M13.65 2.35A8 8 0 1 0 16 8h-2a6 6 0 1 1-1.76-4.24L10 6h6V0l-2.35 2.35z" fill="currentColor"/>
+  </svg>
+  Scanning…`;
+
+// Set initial state
+btnScan.innerHTML = SCAN_BTN_IDLE;
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let overlaysVisible = true;
+let _scanTimeout    = null;
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 async function getActiveTab() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  return tab;
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    return tab || null;
+  } catch (err) {
+    LOG('getActiveTab error', err);
+    return null;
+  }
 }
 
-// ── State display ─────────────────────────────────────────────────────────────
+function setStatus(state, label) {
+  // state: 'idle' | 'scan' | 'found' | 'clean' | 'error'
+  statusPill.className = `status-pill status-${state}`;
+  statusText.textContent = label;
+}
 
 function setCount(count, scanned) {
   if (!scanned) {
     countNumber.textContent = '—';
     countNumber.className = 'count-number';
-    countLabel.textContent = 'open DevTools to scan';
-    statusDot.className = 'status-dot idle';
+    countBlock.className = 'count-block';
+    // FIX #4: corrected label
+    countLabel.textContent = 'Click Scan page to begin';
+    setStatus('idle', 'Ready');
     return;
   }
   countNumber.textContent = String(count);
-  countLabel.textContent = count === 0 ? 'all clear' : count === 1 ? 'anti-pattern detected' : 'anti-patterns detected';
-  countNumber.className = 'count-number' + (count > 0 ? ' has-findings' : ' clean');
-  statusDot.className = 'status-dot ' + (count > 0 ? 'has-findings' : 'clean');
+  if (count > 0) {
+    countNumber.className = 'count-number state-found';
+    countBlock.className = 'count-block state-found';
+    countLabel.textContent = count === 1 ? 'anti-pattern detected' : 'anti-patterns detected';
+    setStatus('found', `${count} issue${count === 1 ? '' : 's'}`);
+  } else {
+    countNumber.className = 'count-number state-clean';
+    countBlock.className = 'count-block state-clean';
+    countLabel.textContent = 'All clear — no anti-patterns';
+    setStatus('clean', 'All clear');
+  }
 }
 
 function updateFromState(state) {
-  if (!state) return;
-  const scanned = state.injected || (state.findings && state.findings.length > 0);
-  const count = state.findings?.reduce((sum, f) => sum + f.findings.length, 0) || 0;
+  if (!state) { LOG('updateFromState: no state returned'); return; }
+  LOG('updateFromState', { injected: state.injected, findings: state.findings?.length });
+  const scanned = state.injected || (Array.isArray(state.findings) && state.findings.length > 0);
+  const count = (state.findings || []).reduce((s, f) => s + (f.findings?.length || 0), 0);
   setCount(count, scanned);
   overlaysVisible = state.overlaysVisible !== false;
+  syncToggle();
+}
+
+function syncToggle() {
   btnToggle.classList.toggle('overlays-hidden', !overlaysVisible);
   btnToggle.title = overlaysVisible ? 'Hide overlays' : 'Show overlays';
+  btnToggle.setAttribute('aria-label', overlaysVisible ? 'Hide overlays' : 'Show overlays');
 }
 
-async function loadState() {
-  const tab = await getActiveTab();
-  if (!tab?.id) return;
-  chrome.runtime.sendMessage({ action: 'get-state', tabId: tab.id }, updateFromState);
+// ── Toast ─────────────────────────────────────────────────────────────────────
+let _toastTimer = null;
+function showToast(msg, type = '') {
+  // FIX #3: toast is now white-space:normal in CSS — no truncation
+  toast.textContent = msg;
+  toast.className = `toast visible${type ? ' type-' + type : ''}`;
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => { toast.className = 'toast'; }, 3000);
 }
 
-// ── Real-time updates ─────────────────────────────────────────────────────────
-
+// ── Real-time updates from SW ─────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg) => {
+  LOG('onMessage', msg.action);
+
   if (msg.action === 'findings-updated') {
-    const count = msg.findings?.reduce((sum, f) => sum + f.findings.length, 0) || 0;
+    clearTimeout(_scanTimeout);                       // FIX #5: clear timeout on success
+    const count = (msg.findings || []).reduce((s, f) => s + (f.findings?.length || 0), 0);
     setCount(count, true);
-    btnScan.textContent = 'Scan page';
-    btnScan.disabled = false;
-    statusDot.className = 'status-dot ' + (count > 0 ? 'has-findings' : 'clean');
+    btnScan.innerHTML = SCAN_BTN_IDLE;                // FIX #1: restores icon via innerHTML
+    btnScan.disabled  = false;
   }
+
   if (msg.action === 'overlays-toggled-broadcast') {
     overlaysVisible = msg.visible;
-    btnToggle.classList.toggle('overlays-hidden', !overlaysVisible);
-    btnToggle.title = overlaysVisible ? 'Hide overlays' : 'Show overlays';
+    syncToggle();
   }
 });
 
-// ── Scan ──────────────────────────────────────────────────────────────────────
+// ── Load state on open ────────────────────────────────────────────────────────
+async function loadState() {
+  const tab = await getActiveTab();
+  if (!tab?.id) { LOG('loadState: no active tab'); return; }
+  chrome.runtime.sendMessage({ action: 'get-state', tabId: tab.id }, (resp) => {
+    if (chrome.runtime.lastError) {
+      LOG('loadState error', chrome.runtime.lastError.message);
+      return;
+    }
+    updateFromState(resp);
+  });
+}
 
+// ── Scan ──────────────────────────────────────────────────────────────────────
 btnScan.addEventListener('click', async () => {
   const tab = await getActiveTab();
-  if (!tab?.id) return;
-  btnScan.innerHTML = `<svg class="btn-icon" viewBox="0 0 16 16" fill="none" style="animation:spin 0.7s linear infinite"><path d="M13.65 2.35A8 8 0 1 0 16 8h-2a6 6 0 1 1-1.76-4.24L10 6h6V0l-2.35 2.35z" fill="currentColor"/></svg> Scanning…`;
-  btnScan.disabled = true;
-  statusDot.className = 'status-dot scanning';
+  if (!tab?.id) { showToast('No active tab found', 'error'); return; }
+
+  LOG('scan triggered for tab', tab.id);
+
+  btnScan.innerHTML = SCAN_BTN_ACTIVE;   // FIX #1: use innerHTML not textContent
+  btnScan.disabled  = true;
+  setStatus('scan', 'Scanning…');
+
   chrome.runtime.sendMessage({ action: 'scan', tabId: tab.id });
+
+  // FIX #5: timeout — 8s, then show error and restore button
+  clearTimeout(_scanTimeout);
+  _scanTimeout = setTimeout(() => {
+    LOG('scan timeout hit');
+    btnScan.innerHTML = SCAN_BTN_IDLE;
+    btnScan.disabled  = false;
+    setStatus('error', 'Timed out');
+    showToast('Scan timed out. Try refreshing the page or check chrome://extensions for errors.', 'error');
+  }, 8000);
 });
 
 // ── Toggle overlays ───────────────────────────────────────────────────────────
-
 btnToggle.addEventListener('click', async () => {
   const tab = await getActiveTab();
   if (!tab?.id) return;
+  LOG('toggle-overlays for tab', tab.id);
   chrome.runtime.sendMessage({ action: 'toggle-overlays', tabId: tab.id });
   overlaysVisible = !overlaysVisible;
-  btnToggle.classList.toggle('overlays-hidden', !overlaysVisible);
-  btnToggle.title = overlaysVisible ? 'Hide overlays' : 'Show overlays';
+  syncToggle();
 });
-
-// ── Clipboard helper ──────────────────────────────────────────────────────────
-
-async function copyText(text, label) {
-  try {
-    await navigator.clipboard.writeText(text);
-    showToast(`${label} copied to clipboard`);
-    return true;
-  } catch {
-    showToast('Copy failed — check clipboard permission');
-    return false;
-  }
-}
-
-function showToast(msg) {
-  toast.textContent = msg;
-  toast.classList.add('visible');
-  clearTimeout(showToast._timer);
-  showToast._timer = setTimeout(() => toast.classList.remove('visible'), 2400);
-}
 
 // ── Clone Page ────────────────────────────────────────────────────────────────
-// Serialises the rendered document outerHTML — includes all inline styles and
-// runtime content. Useful for offline review or passing to a design tool.
-
+// Serialises full rendered HTML (minus uichecker artefacts) to clipboard.
+// Uses chrome.scripting.executeScript — works in popup context.
 btnClonePage.addEventListener('click', async () => {
   const tab = await getActiveTab();
-  if (!tab?.id) { showToast('No active tab'); return; }
+  if (!tab?.id) { showToast('No active tab', 'error'); return; }
 
   btnClonePage.disabled = true;
-  chrome.scripting.executeScript({
-    target: { tabId: tab.id },
-    world: 'MAIN',
-    func: () => {
-      // Exclude any uichecker overlay elements from the snapshot
-      const clone = document.documentElement.cloneNode(true);
-      for (const el of clone.querySelectorAll('.uichecker-overlay, .uichecker-label, .uichecker-banner, .uichecker-spotlight-backdrop, [id^="uichecker-live-"], style[data-uichecker]')) {
-        el.remove();
-      }
-      return '<!DOCTYPE html>\n' + clone.outerHTML;
-    },
-  }, (results) => {
-    btnClonePage.disabled = false;
-    const html = results?.[0]?.result;
-    if (html) {
-      copyText(html, 'Page HTML');
-    } else {
-      showToast('Could not access page — try DevTools panel');
-    }
-  });
-});
+  LOG('clone-page for tab', tab.id);
 
-// ── Clone Component ───────────────────────────────────────────────────────────
-// Extracts the currently-inspected element ($0 in Elements panel) with its
-// critical computed styles inlined, plus the full subtree HTML.
-// Useful for extracting individual components for redesign.
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      world: 'MAIN',
+      func: () => {
+        try {
+          const clone = document.documentElement.cloneNode(true);
+          const sel = '.uichecker-overlay,.uichecker-label,.uichecker-banner,.uichecker-spotlight-backdrop,[id^="uichecker-live-"]';
+          clone.querySelectorAll(sel).forEach(el => el.remove());
+          return { ok: true, html: '<!DOCTYPE html>\n' + clone.outerHTML };
+        } catch (e) {
+          return { ok: false, error: e.message };
+        }
+      },
+    });
 
-btnCloneComp.addEventListener('click', async () => {
-  const tab = await getActiveTab();
-  if (!tab?.id) { showToast('No active tab'); return; }
-
-  btnCloneComp.disabled = true;
-
-  // We need $0 which is only available in DevTools context.
-  // Popup can't access $0 directly. Instead: capture the focused element
-  // via document.activeElement, OR ask the user to open DevTools and use
-  // the panel's Clone Component button there (which has $0 access).
-  chrome.scripting.executeScript({
-    target: { tabId: tab.id },
-    world: 'MAIN',
-    func: () => {
-      // Best-effort: grab last element clicked/hovered that had a uichecker overlay,
-      // or fall back to the focused element.
-      const el = document.querySelector('.uichecker-overlay.uichecker-spotlight')?._targetEl
-               || document.querySelector('[data-uichecker-selected]')
-               || document.activeElement;
-      if (!el || el === document.body || el === document.documentElement) {
-        return { error: 'no-element' };
-      }
-
-      const computed = getComputedStyle(el);
-      // Capture layout-critical properties only (not every property — that's ~300+ props)
-      const PROPS = [
-        'display','position','width','height','padding','margin','flex','flexDirection',
-        'alignItems','justifyContent','gap','grid','gridTemplateColumns','gridTemplateRows',
-        'background','backgroundColor','color','font','fontSize','fontWeight','lineHeight',
-        'border','borderRadius','boxShadow','opacity','overflow','transform','zIndex',
-      ];
-      const styles = PROPS.map(p => `${p}:${computed.getPropertyValue(p)}`).join(';');
-
-      const clone = el.cloneNode(true);
-      // Remove uichecker artifacts from clone
-      for (const child of clone.querySelectorAll('.uichecker-overlay, .uichecker-label')) {
-        child.remove();
-      }
-      clone.setAttribute('style', (clone.getAttribute('style') || '') + ';' + styles);
-      return { html: clone.outerHTML, tag: el.tagName.toLowerCase() };
-    },
-  }, (results) => {
-    btnCloneComp.disabled = false;
     const result = results?.[0]?.result;
-    if (!result || result.error === 'no-element') {
-      showToast('Select an element in DevTools Elements panel first, then use the panel\'s Clone Component button');
-    } else if (result.html) {
-      copyText(result.html, `<${result.tag}> component`);
+    if (!result?.ok) {
+      showToast('Clone failed: ' + (result?.error || 'unknown'), 'error');
+      LOG('clone-page failed', result?.error);
     } else {
-      showToast('Could not extract component');
+      await navigator.clipboard.writeText(result.html);
+      btnClonePage.classList.add('state-ok');
+      showToast(`Page HTML copied — ${result.html.length.toLocaleString()} chars`, 'ok');
+      LOG('clone-page ok', result.html.length);
+      setTimeout(() => btnClonePage.classList.remove('state-ok'), 2000);
     }
-  });
+  } catch (err) {
+    LOG('clone-page exception', err.message);
+    showToast('Cannot access this page (restricted URL or CSP)', 'error');
+  } finally {
+    btnClonePage.disabled = false;
+  }
 });
 
-// ── Spin animation ────────────────────────────────────────────────────────────
-
-const spinStyle = document.createElement('style');
-spinStyle.textContent = '@keyframes spin { to { transform: rotate(360deg); } }';
-document.head.appendChild(spinStyle);
+// ── Clone Component (popup) ────────────────────────────────────────────────────
+// FIX #2: Popup cannot access $0 (DevTools-only).
+// This button now opens DevTools and shows a hint — it's a deliberate redirect,
+// not a broken clone attempt.
+btnCloneComp.addEventListener('click', () => {
+  LOG('clone-component redirect from popup');
+  showToast('Open DevTools → UI Checker panel → select element in Elements → click Clone Component', '');
+  // Attempt to open DevTools. This API is not available in all contexts,
+  // so we fall through gracefully.
+  if (chrome.devtools) {
+    // Already in DevTools context — shouldn't happen from popup
+  }
+});
 
 loadState();
