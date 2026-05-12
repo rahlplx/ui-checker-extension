@@ -2715,7 +2715,9 @@ if (IS_BROWSER) {
     };
     window.__UICHECKER_PREV_HANDLER__ = _cmdHandler;
     window.addEventListener('message', _cmdHandler);
-    window.postMessage({ source: 'uichecker-ready' }, '*');
+    // Post ready with scanId if provided in config (v2 ACK system)
+    const readyScanId = window.__UICHECKER_CONFIG__?.scanId || null;
+    window.postMessage({ source: 'uichecker-ready', scanId: readyScanId }, '*');
   } else {
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', () => setTimeout(scan, 100));

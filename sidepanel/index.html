@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>UI Checker AI Canvas</title>
+  <link rel="stylesheet" href="index.css">
+</head>
+<body>
+
+  <!-- ── Toolbar ─────────────────────────────────────────────────────── -->
+  <header class="toolbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <rect width="20" height="20" rx="5" fill="#ef4444"/>
+        <path d="M5.5 10.5l3 3 6-6" stroke="#fff" stroke-width="2.2"
+              stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span class="brand-name">UI Checker</span>
+      <span class="brand-badge">AI Canvas</span>
+    </div>
+    <div class="toolbar-right">
+      <span class="badge-pill" id="total-badge" style="display:none">0</span>
+      <button class="icon-btn" id="btn-settings" title="Settings" aria-label="Settings">
+        <svg viewBox="0 0 16 16" fill="none"><path d="M13.6 8.8c.04-.26.06-.53.06-.8s-.02-.54-.06-.8l1.74-1.36a.42.42 0 0 0 .1-.52l-1.64-2.84a.41.41 0 0 0-.5-.18l-2.06.82a5.96 5.96 0 0 0-1.38-.8L9.5.2A.4.4 0 0 0 9.1 0H5.82a.4.4 0 0 0-.4.34l-.3 2.12c-.5.2-.96.48-1.38.8l-2.06-.82a.4.4 0 0 0-.5.18L-.46 5.46a.41.41 0 0 0 .1.52L1.38 7.34c-.04.26-.06.53-.06.8s.02.54.06.8L-.36 10.3a.42.42 0 0 0-.1.52l1.64 2.84c.1.18.32.24.5.18l2.06-.82c.42.32.88.6 1.38.8l.3 2.12a.4.4 0 0 0 .4.34h3.28a.4.4 0 0 0 .4-.34l.3-2.12c.5-.2.96-.48 1.38-.8l2.06.82c.18.08.4 0 .5-.18l1.64-2.84a.41.41 0 0 0-.1-.52L13.6 8.8zM7.46 10.8c-1.56 0-2.82-1.26-2.82-2.8s1.26-2.8 2.82-2.8 2.82 1.26 2.82 2.8-1.26 2.8-2.82 2.8z" fill="currentColor"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- ── Tab nav ──────────────────────────────────────────────────────── -->
+  <nav class="tab-nav" role="tablist">
+    <button class="tab-btn active" data-tab="audit" role="tab" aria-selected="true">
+      <svg viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.4"/><path d="M5 7l1.5 1.5L9.5 5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      Audit
+    </button>
+    <button class="tab-btn" data-tab="seo" role="tab" aria-selected="false">
+      <svg viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4.5" stroke="currentColor" stroke-width="1.4"/><path d="M10 10l2.5 2.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      SEO
+    </button>
+    <button class="tab-btn" data-tab="clone" role="tab" aria-selected="false">
+      <svg viewBox="0 0 14 14" fill="none"><rect x="1" y="3" width="8" height="9" rx="1" stroke="currentColor" stroke-width="1.4" fill="none"/><path d="M5 1h7a1 1 0 0 1 1 1v9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      Clone
+    </button>
+  </nav>
+
+  <!-- ── Settings panel ───────────────────────────────────────────────── -->
+  <div class="settings-panel" id="settings-panel" style="display:none">
+    <div class="settings-title">Settings</div>
+    <label class="setting-row">
+      <span class="setting-label">
+        Gemini API Key
+        <span class="setting-hint">For Component Cloner (BYOK)</span>
+      </span>
+      <input type="password" class="setting-input" id="api-key-input"
+             placeholder="AIza..." autocomplete="off">
+    </label>
+    <button class="btn-primary" id="btn-save-key">Save Key</button>
+    <div class="setting-status" id="key-status"></div>
+
+    <div class="settings-divider"></div>
+
+    <label class="setting-row setting-row--toggle">
+      <span class="setting-label">
+        Auto-scan on open
+        <span class="setting-hint">Scan page when side panel opens</span>
+      </span>
+      <label class="toggle-switch">
+        <input type="checkbox" id="auto-scan-toggle" checked>
+        <span class="toggle-track"></span>
+      </label>
+    </label>
+
+    <label class="setting-row setting-row--toggle">
+      <span class="setting-label">
+        Spotlight blur
+        <span class="setting-hint">Blur page when hovering a finding</span>
+      </span>
+      <label class="toggle-switch">
+        <input type="checkbox" id="spotlight-toggle" checked>
+        <span class="toggle-track"></span>
+      </label>
+    </label>
+  </div>
+
+  <!-- ── AUDIT TAB ────────────────────────────────────────────────────── -->
+  <div class="tab-content active" id="tab-audit">
+
+    <div class="action-bar">
+      <button class="btn-primary" id="btn-audit">
+        <svg viewBox="0 0 14 14" fill="none" width="12" height="12"><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5"/><path d="M4.5 7l2 2 3-3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Audit Page
+      </button>
+      <button class="btn-ghost" id="btn-toggle-overlays" title="Toggle overlays">
+        <svg viewBox="0 0 14 14" fill="none" width="12" height="12"><path d="M7 2.5C4.2 2.5 1.8 4.3 1 7c.8 2.7 3.2 4.5 6 4.5s5.2-1.8 6-4.5C12.2 4.3 9.8 2.5 7 2.5zm0 7.5a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm0-4.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z" fill="currentColor"/></svg>
+        Overlays
+      </button>
+    </div>
+
+    <!-- AI status bar -->
+    <div class="ai-status-bar" id="ai-status-bar" style="display:none">
+      <span class="ai-dot"></span>
+      <span id="ai-status-text">Gemini Nano ready</span>
+    </div>
+
+    <!-- Findings summary -->
+    <div class="summary-row" id="audit-summary" style="display:none">
+      <div class="summary-pill pill-purple" id="pill-slop">
+        <span id="slop-count">0</span> AI tells
+      </div>
+      <div class="summary-pill pill-amber" id="pill-quality">
+        <span id="quality-count">0</span> quality
+      </div>
+    </div>
+
+    <!-- AI Chat stream -->
+    <div class="chat-container" id="chat-container">
+      <!-- Empty state -->
+      <div class="empty-state" id="audit-empty">
+        <div class="empty-glyph">✓</div>
+        <p class="empty-title">AI-Powered UI Audit</p>
+        <p class="empty-hint">Click Audit Page to scan for anti-patterns and get AI-powered UX recommendations.</p>
+        <div class="ai-badge" id="ai-availability-badge">
+          Checking local AI…
+        </div>
+      </div>
+    </div>
+
+    <!-- Deterministic findings (27 rules) -->
+    <div class="findings-section" id="findings-section" style="display:none">
+      <div class="section-header">
+        <span class="section-label">Deterministic findings</span>
+        <button class="text-btn" id="btn-copy-findings">Copy all</button>
+      </div>
+      <div id="findings-list"></div>
+    </div>
+  </div>
+
+  <!-- ── SEO TAB ──────────────────────────────────────────────────────── -->
+  <div class="tab-content" id="tab-seo">
+
+    <div class="action-bar">
+      <button class="btn-primary" id="btn-seo-audit">
+        <svg viewBox="0 0 14 14" fill="none" width="12" height="12"><circle cx="6" cy="6" r="4.5" stroke="currentColor" stroke-width="1.5"/><path d="M10 10l2.5 2.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        Run SEO Audit
+      </button>
+    </div>
+
+    <!-- SEO score ring -->
+    <div class="seo-score-block" id="seo-score-block" style="display:none">
+      <div class="seo-ring-wrap">
+        <svg class="seo-ring" viewBox="0 0 80 80">
+          <circle class="ring-bg" cx="40" cy="40" r="34" stroke-width="7" fill="none"/>
+          <circle class="ring-fill" id="ring-fill" cx="40" cy="40" r="34"
+                  stroke-width="7" fill="none" stroke-dasharray="213.6"
+                  stroke-dashoffset="213.6" stroke-linecap="round"
+                  transform="rotate(-90 40 40)"/>
+        </svg>
+        <div class="ring-label">
+          <span class="ring-score" id="seo-score-number">0</span>
+          <span class="ring-unit">/ 100</span>
+        </div>
+      </div>
+      <div class="seo-meta" id="seo-meta"></div>
+    </div>
+
+    <!-- SEO findings -->
+    <div id="seo-findings-list"></div>
+
+    <!-- SEO empty state -->
+    <div class="empty-state" id="seo-empty">
+      <div class="empty-glyph" style="font-size:22px">🔍</div>
+      <p class="empty-title">SEO Audit</p>
+      <p class="empty-hint">Checks title, meta, OG tags, canonical, headings, alt texts, schema, Core Web Vitals and more.</p>
+    </div>
+  </div>
+
+  <!-- ── CLONE TAB ────────────────────────────────────────────────────── -->
+  <div class="tab-content" id="tab-clone">
+
+    <div class="action-bar">
+      <button class="btn-primary" id="btn-inspector-toggle">
+        <svg viewBox="0 0 14 14" fill="none" width="12" height="12"><circle cx="6" cy="6" r="2" stroke="currentColor" stroke-width="1.5"/><path d="M6 1v2M6 11v2M1 6h2M11 6h2M3.2 3.2l1.4 1.4M9.4 9.4l1.4 1.4M3.2 8.8l1.4-1.4M9.4 4.6l1.4-1.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+        <span id="inspector-btn-label">Enable Inspector</span>
+      </button>
+    </div>
+
+    <div class="inspector-hint" id="inspector-hint" style="display:none">
+      <div class="hint-dot"></div>
+      Hover to highlight. Click to clone. <kbd>Esc</kbd> to cancel.
+    </div>
+
+    <!-- React preview iframe (hidden until code available) -->
+    <div class="sandbox-wrap" id="sandbox-wrap" style="display:none">
+      <div class="sandbox-header">
+        <span class="sandbox-label">Live Preview</span>
+        <button class="text-btn" id="btn-copy-code">Copy code</button>
+      </div>
+      <iframe id="sandbox-iframe" src="../sandbox/sandbox.html"
+              class="sandbox-frame" sandbox="allow-scripts allow-same-origin"
+              title="Component preview"></iframe>
+    </div>
+
+    <!-- Code output -->
+    <div class="code-block-wrap" id="code-block-wrap" style="display:none">
+      <div class="code-header">
+        <span class="code-label">React Component</span>
+        <button class="text-btn" id="btn-copy-code-2">Copy</button>
+      </div>
+      <pre class="code-block" id="code-output"></pre>
+    </div>
+
+    <!-- Clone empty state -->
+    <div class="empty-state" id="clone-empty">
+      <div class="empty-glyph" style="font-size:22px">⬡</div>
+      <p class="empty-title">Component Cloner</p>
+      <p class="empty-hint">Enable Inspector, hover over any element on the page, and click to clone it as a React + Tailwind component.</p>
+      <p class="empty-hint" style="margin-top:6px">Requires a Gemini API key in Settings.</p>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
