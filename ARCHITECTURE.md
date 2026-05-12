@@ -1,384 +1,282 @@
-# UI Checker — Architecture Documentation
+# UI Checker — Architecture
 
-> A Chrome DevTools extension that detects 27 deterministic UI anti-patterns in any web page. Forked from the open-source [Impeccable](https://github.com/pbakaus/impeccable) project (Apache 2.0) with all original branding removed and replaced.
-
----
-
-## Table of Contents
-
-1. [Overview](#overview)
-2. [Extension Architecture](#extension-architecture)
-3. [Detection Engine](#detection-engine)
-4. [Anti-Pattern Rule Catalog](#anti-pattern-rule-catalog)
-5. [Communication Protocol](#communication-protocol)
-6. [Scan Lifecycle](#scan-lifecycle)
-7. [Build Pipeline](#build-pipeline)
-8. [Permissions Justification](#permissions-justification)
-9. [File Structure](#file-structure)
-10. [Rebranding Changes](#rebranding-changes)
+Technical reference for contributors and AI agents working in this codebase.
 
 ---
 
 ## Overview
 
-UI Checker is a Manifest V3 Chrome DevTools extension that scans web pages for common UI anti-patterns — visual tells of AI-generated interfaces ("slop") and general design/accessibility quality issues. The detection is entirely deterministic and runs offline with no AI/LLM dependencies.
+UI Checker is a **Manifest V3 Chrome DevTools extension**. It detects 27 deterministic UI anti-patterns by running a detection engine directly in the page's JavaScript context, then surfacing findings through DevTools panel and sidebar UI.
 
-**Key characteristics:**
-- **27 deterministic rules** organized into two categories: "slop" (15 AI-tell rules) and "quality" (12 design/a11y rules)
-- **Three execution phases**: HTML regex scan, element-by-element DOM walk, page-level aggregate checks
-- **Page-context execution**: The detector runs in the page's main world (not isolated) to access `getComputedStyle` and `document.styleSheets.cssRules`
-- **On-demand injection**: Content script and detector are only loaded when the user engages with the extension
-- **SPA-aware**: Detects navigation via `popstate`/`hashchange` and auto-rescans
-- **Tailwind-aware**: Detects patterns via both CSS computed styles and Tailwind utility classes
+No build step. No bundler. No framework. Pure vanilla JS across every file.
 
 ---
 
-## Extension Architecture
+## Three-context model
+
+Chrome extensions run in isolated execution environments. UI Checker spans three:
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Chrome Browser                            │
-│                                                              │
-│  ┌──────────┐   ┌──────────────┐   ┌────────────────────┐  │
-│  │  Popup   │   │ DevTools     │   │ DevTools           │  │
-│  │  popup.js│   │ Panel        │   │ Sidebar            │  │
-│  │          │   │ panel.js     │   │ sidebar.js         │  │
-│  └────┬─────┘   └──────┬───────┘   └────────┬───────────┘  │
-│       │                │                     │              │
-│       │   chrome.runtime.sendMessage         │              │
-│       │                │   chrome.runtime.connect            │
-│       ▼                ▼                     ▼              │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │              Service Worker                          │    │
-│  │         background/service-worker.js                 │    │
-│  │  • tabState Map  • panelPorts Map  • devtoolsTabs   │    │
-│  │  • Badge updates  • Scan orchestration              │    │
-│  └────────────────────┬────────────────────────────────┘    │
-│                       │ chrome.tabs.sendMessage              │
-│                       ▼                                      │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │           Content Script (isolated world)            │    │
-│  │         content/content-script.js                    │    │
-│  │  • Bridge between extension ↔ page context           │    │
-│  │  • Idempotency: __UICHECKER_CS_LOADED__              │    │
-│  └────────────────────┬────────────────────────────────┘    │
-│                       │ window.postMessage                   │
-│                       ▼                                      │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │           Detector (page main world)                 │    │
-│  │            detector/detect.js                        │    │
-│  │  • 27 anti-pattern checks                           │    │
-│  │  • Overlay rendering & spotlight                     │    │
-│  │  • Config: __UICHECKER_CONFIG__                      │    │
-│  └─────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│  DEVTOOLS CONTEXT                                            │
+│  devtools/devtools.js  →  panel.js / sidebar.js             │
+│  Has: chrome.devtools.*, $0, inspectedWindow.eval()         │
+└────────────────┬─────────────────────────────────────────────┘
+                 │  chrome.runtime.connect (port) + sendMessage
+┌────────────────▼─────────────────────────────────────────────┐
+│  SERVICE WORKER (background)                                 │
+│  background/service-worker.js                                │
+│  Has: chrome.tabs, chrome.scripting, chrome.storage         │
+│  State: tabState Map, panelPorts Map, devtoolsTabs Set       │
+└────────────────┬─────────────────────────────────────────────┘
+                 │  chrome.tabs.sendMessage
+┌────────────────▼─────────────────────────────────────────────┐
+│  CONTENT SCRIPT — isolated world                             │
+│  content/content-script.js                                   │
+│  Has: chrome.runtime, shared DOM access                      │
+└────────────────┬─────────────────────────────────────────────┘
+                 │  window.postMessage (source: uichecker-command/results/ready)
+┌────────────────▼─────────────────────────────────────────────┐
+│  DETECTOR — page MAIN world                                  │
+│  detector/detect.js (injected via chrome.scripting)          │
+│  Has: full DOM, computed styles, page globals                │
+└──────────────────────────────────────────────────────────────┘
+```
+
+Three distinct message transports — never mix them:
+
+| Transport | Between | Used for |
+|---|---|---|
+| `chrome.runtime.sendMessage` | Popup/Panel ↔ SW | One-shot requests (scan, get-state, findings) |
+| `chrome.runtime.connect` (port) | Panel/Sidebar ↔ SW | Persistent connection, findings push, heartbeat |
+| `window.postMessage` | Content script ↔ Detector | Commands and results within the page context |
+
+---
+
+## File map
+
+```
+manifest.json                      MV3 manifest
+background/
+  service-worker.js                Hub: routes all messages, owns tabState
+content/
+  content-script.js                Bridge: CS → Detector injection and relay
+detector/
+  detect.js                        All 27 rules, overlay rendering (IIFE, MAIN world)
+  antipatterns.json                Rule metadata (id, name, category, description)
+devtools/
+  devtools.html / devtools.js      DevTools page: creates panel + sidebar, lifecycle port
+  panel.html / panel.css / panel.js  Findings panel UI
+  sidebar.html / sidebar.css / sidebar.js  Elements panel sidebar
+popup/
+  popup.html / popup.css / popup.js  Toolbar popup
+icons/
+  icon-16/32/48/128.png            Extension icons
 ```
 
 ---
 
-## Detection Engine
+## Scan lifecycle
 
-The detection engine (`detector/detect.js`) is built from `cli/engine/detect-antipatterns.mjs` via a build script. It runs in the page's main world inside an IIFE with a `typeof window` guard.
+### First scan on a page
 
-### Execution Phases
+```
+1. User triggers scan (popup button, panel auto-scan, or port message)
+2. SW: ensureContentScriptInjected(tabId)
+   → chrome.scripting.executeScript({ files: ['content/content-script.js'] })
+   → CS IIFE runs; idempotency guard: if (__UICHECKER_CS_LOADED__) return
+3. SW: chrome.tabs.sendMessage(tabId, { action: 'scan', config })
+4. CS: injectAndScan()
+   → Probes detector: window.postMessage({ source: 'uichecker-command', action: 'ping' })
+   → Waits 120ms for uichecker-ready response
+5a. If detector responds (already loaded): sendScanCommand() directly
+5b. If no response: chrome.runtime.sendMessage({ action: 'inject-fallback' })
+    → SW: chrome.scripting.executeScript({ world: 'MAIN', files: ['detector/detect.js'] })
+    → Detector IIFE runs in page context
+    → Posts window.postMessage({ source: 'uichecker-ready' })
+6. CS receives uichecker-ready → sets injected=true → sendScanCommand()
+7. Detector runs scan phases:
+   - Phase 1: per-element DOM walk (9 check functions)
+   - Phase 2: page-level aggregates
+   - Phase 3: HTML regex on cloned outerHTML
+8. Detector posts: window.postMessage({ source: 'uichecker-results', findings, count })
+9. CS receives → chrome.runtime.sendMessage({ action: 'findings', findings })
+10. SW: stores in tabState, updates badge, notifies all panel ports
+11. Panel/Sidebar: renders findings
+```
 
-The scan function executes in this order:
+### Subsequent scans (same page, DevTools reopened)
 
-#### Phase 1: Element-by-Element DOM Walk
+The content script's `injected` flag resets to `false` when DevTools closes (SW sends `remove` action). The detector stays alive in page memory.
+
+On next scan: CS pings the detector. Detector responds with `uichecker-ready` (ping handler). CS scans without re-injecting.
+
+Idempotency is maintained by:
+- CS: `window.__UICHECKER_CS_LOADED__` prevents double-injection
+- Detector: `window.__UICHECKER_PREV_HANDLER__` stores and removes the prior message listener before attaching a new one on re-injection
+
+### Navigation
+
+`webNavigation.onCompleted` → SW resets `csInjected` and `injected` flags in tabState, rescans if DevTools was open.
+
+SPA navigation (`popstate`, `hashchange`) → CS sends rescan after 500ms debounce.
+
+---
+
+## Service worker state
+
+The SW is an MV3 service worker — it can be terminated after ~30s of inactivity. All state is in-memory (`tabState`, `panelPorts`, `devtoolsTabs`). On restart, state is empty but port reconnect and re-injection rebuild it transparently.
+
 ```javascript
-for (const el of document.querySelectorAll('*')) {
-  // Skip extension's own elements
-  if (el.closest('.uichecker-overlay, .uichecker-label, ...')) continue;
-  
-  const findings = [
-    ...checkElementBordersDOM(el),
-    ...checkElementColorsDOM(el),
-    ...checkElementMotionDOM(el),
-    ...checkElementGlowDOM(el),
-    ...checkElementAIPaletteDOM(el),
-    ...checkElementIconTileDOM(el),
-    ...checkElementItalicSerifDOM(el),
-    ...checkElementHeroEyebrowDOM(el),
-    ...checkElementQualityDOM(el),
-  ];
+// tabState shape
+{
+  tabId: {
+    findings:       [],      // last scan results
+    overlaysVisible: true,   // current overlay toggle state
+    injected:       false,   // whether detector is loaded in page
+    csInjected:     false,   // whether content script is injected
+  }
 }
 ```
 
-9 per-element check functions run on every DOM element, each returning an array of findings.
-
-#### Phase 2: Page-Level Aggregate Checks
-- **`checkTypography()`**: Font usage analysis (overused fonts, single font, flat hierarchy)
-- **`checkLayout()`**: Nested cards detection, everything-centered detection
-- **`checkPageQualityDOM()`**: Skipped heading levels
-
-#### Phase 3: HTML Regex Scan
-- **`checkHtmlPatterns(html)`**: Regex checks on the cloned document's outerHTML
-  - Pure black background in CSS
-  - Purple/violet accent colors
-  - Gradient text (background-clip: text + gradient)
-  - Monotonous spacing values
-  - Bounce/elastic animation names
-  - Overshoot cubic-bezier curves
-  - Layout property transitions
-  - Dark backgrounds with colored glows
-
-### Color Analysis
-
-The engine supports parsing colors in these formats:
-- `rgb()` / `rgba()` — primary format used for contrast calculations
-- `oklch()` / `lch()` — chroma extraction for neutrality detection
-- `oklab()` / `lab()` — a/b axis for chroma calculation
-- `hsl()` / `hsla()` — saturation extraction
-- `hwb()` — whiteness/blackness for gray detection
-- Hex (`#RGB`, `#RRGGBB`) — direct parsing
-
-### Background Resolution
-
-The `resolveBackground()` function walks up the DOM tree from an element to find the first ancestor with an opaque background color. If the effective background is a gradient (not a solid color), it falls back to `resolveGradientStops()` which extracts individual color stops for worst-case contrast calculations.
-
-### Selector Generation
-
-Findings are tagged with CSS selectors generated by `generateSelector()`, which:
-- Anchors on element IDs when available
-- Filters out CSS-in-JS hashed classes (`css-*`, `sc-*`, `_*`)
-- Filters out extension's own classes (`uichecker-*`)
-- Uses `:nth-of-type()` for disambiguation among siblings
-- Limits traversal depth to 10 levels
+Panel ports are kept alive by a 20-second heartbeat ping from `devtools.js` and `panel.js`.
 
 ---
 
-## Anti-Pattern Rule Catalog
+## Detector (detect.js)
 
-### Slop Category (AI Tells) — 15 Rules
+The detector is a large IIFE (~2700 lines) that runs in the page's MAIN world. It has direct access to the DOM, computed styles, and page globals.
 
-| ID | Name | Detection Method |
-|----|------|-----------------|
-| `side-tab` | Side-tab accent border | Thick colored border (≥2px) on one side only of a card element, with non-neutral color |
-| `border-accent-on-rounded` | Border accent on rounded element | Thick accent border on an element with border-radius > 0 |
-| `overused-font` | Overused font | Inter, Roboto, Geist, Plus Jakarta Sans etc. used as primary font for ≥15% of text elements (min 20 elements) |
-| `single-font` | Single font for everything | Only one distinct primary font across all text elements |
-| `flat-type-hierarchy` | Flat type hierarchy | Font size ratio between largest and smallest < 2.0 (with ≥3 distinct sizes) |
-| `gradient-text` | Gradient text | `background-clip: text` combined with a gradient background-image (or Tailwind `bg-clip-text + bg-gradient-to-*`) |
-| `ai-color-palette` | AI color palette | Purple/violet (hue 260-310) or cyan (hue 160-200) on headings, in gradients, or as neon text on dark backgrounds |
-| `nested-cards` | Nested cards | Card-like element (shadow/border + radius/background) inside another card-like element |
-| `monotonous-spacing` | Monotonous spacing | Single spacing value used for >60% of all spacing declarations with ≤3 unique values (min 10 values) |
-| `everything-centered` | Everything centered | >70% of text elements have `text-align: center` (min 5 elements) |
-| `bounce-easing` | Bounce or elastic easing | Animation names containing "bounce/elastic/wobble/jiggle/spring", or cubic-bezier with y values outside [0, 1] |
-| `dark-glow` | Dark mode with glowing accents | Colored box-shadow with blur > 4px on a background with luminance < 0.1 |
-| `icon-tile-stack` | Icon tile stacked above heading | 32-128px squarish tile with icon above a heading element |
-| `italic-serif-display` | Italic serif display headline | Italic serif font on h1 or h2 at ≥48px |
-| `hero-eyebrow-chip` | Hero eyebrow / pill chip | Uppercase, tracked (≥1.6px), small (≤14px) text directly above a hero h1 (≥48px) |
+### Idempotency
 
-### Quality Category — 12 Rules
+On every injection, the detector checks `window.__UICHECKER_PREV_HANDLER__` and removes the stale listener before attaching a new one. This prevents duplicate scans when the detector is re-injected after a DevTools close/reopen cycle.
 
-| ID | Name | Detection Method |
-|----|------|-----------------|
-| `pure-black-white` | Pure black background | Background color is exactly `#000000` (or Tailwind `bg-black`) |
-| `gray-on-color` | Gray text on colored background | Low-chroma text on a chromatic background |
-| `low-contrast` | Low contrast text | WCAG AA contrast ratio < 4.5:1 (body) or < 3:1 (large text/headings) |
-| `layout-transition` | Layout property animation | Transition on width, height, padding, margin, or min/max variants |
-| `line-length` | Line length too long | Characters per line > 80 (strict) or > 120 (lax) based on element width |
-| `cramped-padding` | Cramped padding | Vertical padding < max(4px, fontSize×0.3) or horizontal < max(8px, fontSize×0.5) in bordered/bg containers |
-| `tight-leading` | Tight line height | Line-height / font-size ratio < 1.3 on multi-line body text (>50 chars) |
-| `skipped-heading` | Skipped heading level | Heading levels skip (e.g., h1 → h3 without h2) |
-| `justified-text` | Justified text | `text-align: justify` without `hyphens: auto` |
-| `tiny-text` | Tiny body text | Font size < 12px on body content (>20 chars, not in UI contexts) |
-| `all-caps-body` | All-caps body text | `text-transform: uppercase` on >30 chars of non-heading body text |
-| `wide-tracking` | Wide letter spacing on body text | Letter-spacing > 0.05em on non-uppercase body text |
+### Detection phases
+
+**Phase 1 — per-element walk:** Queries all visible, non-uichecker elements. Runs 9 check functions against each:
+- `checkContrast` — WCAG AA contrast ratio
+- `checkTypography` — font size, weight, tracking, leading, line length, text-transform
+- `checkLayout` — padding, alignment, nesting depth
+- `checkColor` — pure black/white, grey-on-colour
+- `checkAnimation` — easing functions, transition properties
+- `checkHeadings` — heading level sequence
+- `checkNav` — navigation patterns
+- `checkCard` — card nesting, border accent
+- `checkShadow` — glow effects
+
+**Phase 2 — page-level aggregates:** Checks that require a full-page view:
+- Font weight variety across all text
+- Spacing monotony (how many unique gap values)
+- Colour palette composition
+- Heading hierarchy
+
+**Phase 3 — HTML patterns:** Regex on `document.documentElement.cloneNode(true).outerHTML` for patterns that need raw HTML structure (gradient text, icon tile layout).
+
+### Overlay system
+
+Overlays are absolutely positioned `div` elements injected into `document.body`. They track element position via `IntersectionObserver` and `ResizeObserver`. CSS is injected once as a `<style>` element.
+
+Overlay colour: `oklch(60% 0.27 25)` — vivid red, 3px outline with subtle glow.
 
 ---
 
-## Communication Protocol
+## Clone features
 
-### Message Channels
+### Clone Page
 
-The extension uses three communication mechanisms:
+Available in: popup, panel toolbar.
 
-#### 1. Chrome Runtime Messaging (`chrome.runtime.sendMessage`)
-Used for one-off request/response between content script ↔ service worker and popup ↔ service worker.
-
-| Action | Direction | Payload |
-|--------|-----------|---------|
-| `scan` | SW → CS / Popup → SW | `{ action: 'scan', tabId, config? }` |
-| `findings` | CS → SW | `{ action: 'findings', findings, count }` |
-| `findings-updated` | SW → Popup | `{ action: 'findings-updated', tabId, findings }` |
-| `toggle-overlays` | Popup → SW → CS | `{ action: 'toggle-overlays', tabId }` |
-| `overlays-toggled` | CS → SW | `{ action: 'overlays-toggled', visible }` |
-| `overlays-toggled-broadcast` | SW → Popup | `{ action: 'overlays-toggled-broadcast', tabId, visible }` |
-| `get-state` | Popup → SW | `{ action: 'get-state', tabId }` |
-| `inject-fallback` | CS → SW | `{ action: 'inject-fallback', tabId }` |
-| `disabled-rules-changed` | Panel → SW | Triggers rescan on all injected tabs |
-| `page-pointer-active` | CS → SW | Cursor activity signal for panel hover tracking |
-
-#### 2. Long-Lived Ports (`chrome.runtime.connect`)
-Used for persistent connections from DevTools pages/panels to the service worker.
-
-| Port Name Pattern | Purpose | Auto-Reconnect |
-|-------------------|---------|----------------|
-| `uichecker-devtools-{tabId}` | Lifecycle port — tracks DevTools open/close | Yes (100ms delay) |
-| `uichecker-panel-{tabId}` | Panel port — findings display, scan, highlight | Yes (lazy on next use) |
-| `uichecker-sidebar-{tabId}` | Sidebar port — element-specific findings | Yes (lazy on next use) |
-
-All ports implement heartbeat pings every 20 seconds to keep the MV3 service worker alive.
-
-#### 3. Window PostMessage
-Used for communication between the content script (isolated world) and the detector (page main world).
-
-| Source | Direction | Purpose |
-|--------|-----------|---------|
-| `uichecker-command` | CS → Detector | Scan, toggle overlays, highlight, remove |
-| `uichecker-results` | Detector → CS | Scan findings data |
-| `uichecker-overlays-toggled` | Detector → CS | Overlay visibility state |
-| `uichecker-ready` | Detector → CS | Detector loaded and ready |
-
----
-
-## Scan Lifecycle
-
-```
-1. User triggers scan (popup button / DevTools panel / auto-scan)
-2. Service Worker calls ensureContentScriptInjected(tabId)
-   └─ If csInjected: skip
-   └─ Else: chrome.scripting.executeScript(content-script.js)
-3. Service Worker sends chrome.tabs.sendMessage({ action: 'scan', config })
-4. Content Script receives message
-   └─ If detector not yet loaded: injectAndScan()
-       └─ Create <script src="detector/detect.js">
-       └─ Set dataset.uicheckerExtension = 'true'
-       └─ On error: fallback to chrome.scripting.executeScript(MAIN world)
-   └─ If detector already loaded: sendScanCommand() via postMessage
-5. Detector receives 'scan' command
-   └─ Reads __UICHECKER_CONFIG__ for disabledRules, lineLengthMax, spotlightBlur
-   └─ Runs querySelectorAll('*') loop (9 per-element checks)
-   └─ Runs page-level checks (typography, layout, headings)
-   └─ Runs HTML regex checks on cloned document
-   └─ Creates overlay elements for each finding
-   └─ Posts { source: 'uichecker-results', findings, count }
-6. Content Script relays findings to Service Worker
-7. Service Worker updates tabState, badge, and notifies panels
-8. Panel/Sidebar render findings
+```javascript
+chrome.devtools.inspectedWindow.eval(`
+  (function() {
+    var clone = document.documentElement.cloneNode(true);
+    clone.querySelectorAll('.uichecker-overlay, ...').forEach(el => el.remove());
+    return '<!DOCTYPE html>\\n' + clone.outerHTML;
+  })()
+`, (result) => { navigator.clipboard.writeText(result.html); });
 ```
 
-### SPA Navigation Handling
+### Clone Component
 
-When SPA navigation is detected (via `popstate`/`hashchange`), the content script sends a rescan command to the already-loaded detector after a 500ms delay. On full page navigation, `webNavigation.onCompleted` resets the content script state and triggers a rescan if DevTools is open.
+Available in: panel toolbar, Elements sidebar.
 
----
+Requires `$0` (currently selected element in Elements panel). Extracts outerHTML with 40 critical computed CSS properties inlined as a `style` attribute.
 
-## Build Pipeline
-
-The original project uses `scripts/build-extension.js` to generate `detector/detect.js` from `cli/engine/detect-antipatterns.mjs`:
-
-```
-detect-antipatterns.mjs (source of truth)
-        │
-        ├─ 1. Strip shebang
-        ├─ 2. Strip @browser-strip-start/end sections (Node-only code)
-        ├─ 3. Set IS_BROWSER = true
-        ├─ 4. Wrap in IIFE with window guard
-        │
-        ▼
-detector/detect.js (build artifact — do not edit directly)
-        
-        ┌─ Parallel: Extract ANTIPATTERNS array → detector/antipatterns.json
-```
-
-**Critical**: `detector/detect.js` is a GENERATED file. All edits must be made to `cli/engine/detect-antipatterns.mjs`, then rebuilt. The `antipatterns.json` file is also generated — it's extracted FROM the source, not injected INTO it.
+Only available in DevTools context (panel/sidebar), not in the popup, because `$0` is a DevTools-only variable. The popup's Clone Component button redirects users to the DevTools panel.
 
 ---
 
-## Permissions Justification
+## Settings
 
-| Permission | Justification |
-|-----------|---------------|
-| `activeTab` | Access the current tab for scanning |
-| `scripting` | Inject content script and detector on demand |
-| `storage` | Store user preferences (disabled rules, line length mode, etc.) |
-| `webNavigation` | Detect page navigation for state reset and auto-rescan |
-| `<all_urls>` host permission | Scan any website the user navigates to |
+Stored in `chrome.storage.sync` (syncs across devices):
 
----
+| Key | Type | Default | Effect |
+|---|---|---|---|
+| `autoScan` | `'panel'` \| `'devtools'` | `'panel'` | When to auto-trigger scan |
+| `lineLengthMode` | `'strict'` \| `'lax'` | `'strict'` | 80 or 120 char threshold |
+| `spotlightBlur` | `boolean` | `true` | Blur/dim page on hover |
+| `disabledRules` | `string[]` | `[]` | Rule IDs to skip |
 
-## File Structure
-
-```
-uicheck-extension/
-├── manifest.json                    # Manifest V3 entry point
-├── ARCHITECTURE.md                  # This documentation
-├── background/
-│   └── service-worker.js            # Central message hub, badge, tab state
-├── content/
-│   └── content-script.js            # Bridge: extension ↔ page context
-├── detector/
-│   ├── detect.js                    # Detection engine (build artifact)
-│   └── antipatterns.json            # Rule metadata (build artifact)
-├── devtools/
-│   ├── devtools.html                # DevTools page entry point
-│   ├── devtools.js                  # Creates panel + sidebar, lifecycle port
-│   ├── panel.html                   # Findings panel UI
-│   ├── panel.js                     # Panel logic, settings, copy, highlight
-│   ├── panel.css                    # Panel styles (light + dark theme)
-│   ├── sidebar.html                 # Elements sidebar UI
-│   ├── sidebar.js                   # Element-specific findings via $0
-│   └── sidebar.css                  # Sidebar styles
-├── popup/
-│   ├── popup.html                   # Quick scan popup UI
-│   ├── popup.js                     # Popup logic
-│   └── popup.css                    # Popup styles
-└── icons/
-    ├── icon.svg                     # Vector icon (checkmark on dark bg)
-    ├── icon-16.png                  # 16×16 icon
-    ├── icon-32.png                  # 32×32 icon
-    ├── icon-48.png                  # 48×48 icon
-    └── icon-128.png                 # 128×128 icon
-```
+Config is built by `buildScanConfig()` in the SW and passed to the detector via the `scan` message as `window.__UICHECKER_CONFIG__`.
 
 ---
 
-## Rebranding Changes
+## Design system
 
-This extension was rebranded from the original "Impeccable" extension. The following changes were made:
+**Popup:** AI-Native Precision Dark. Token system: surfaces (`--s0` through `--s4`), borders (`--b0` through `--b3`), text (`--t1` through `--t4`). Background grid texture via CSS `repeating-linear-gradient`.
 
-### Visual Identity
-| Property | Original | Rebranded |
-|----------|----------|-----------|
-| Name | Impeccable | UI Checker |
-| Brand color | `oklch(55% 0.25 350)` (pinkish-red) | `oklch(55% 0.18 250)` (cool blue) |
-| Hover color | `oklch(45% 0.25 350)` | `oklch(45% 0.18 250)` |
-| Badge color | `#d6336c` | `#2563eb` |
-| Logo symbol | `/` (slash) | `✓` (checkmark) |
-| Icon | Slash on dark bg | Checkmark on dark bg |
+**Panel:** Dual theme (light = default DevTools, dark = `.theme-dark`). Semantic palette: purple `#a855f7` for AI tells, amber `#f59e0b` for quality issues, emerald for clean state. Left-border accent on finding items by category.
 
-### Code Identifiers
-| Original | Rebranded |
-|----------|-----------|
-| `__IMPECCABLE_CS_LOADED__` | `__UICHECKER_CS_LOADED__` |
-| `__IMPECCABLE_CONFIG__` | `__UICHECKER_CONFIG__` |
-| `dataset.impeccableExtension` | `dataset.uicheckerExtension` |
-| `impeccable-command` | `uichecker-command` |
-| `impeccable-results` | `uichecker-results` |
-| `impeccable-ready` | `uichecker-ready` |
-| `impeccable-overlays-toggled` | `uichecker-overlays-toggled` |
-| `impeccable-devtools-{id}` | `uichecker-devtools-{id}` |
-| `impeccable-panel-{id}` | `uichecker-panel-{id}` |
-| `impeccable-sidebar-{id}` | `uichecker-sidebar-{id}` |
-| `window.impeccableScan` | `window.uiCheckerScan` |
-| `.impeccable-*` CSS classes | `.uichecker-*` |
-| `@keyframes impeccable-reveal` | `@keyframes uichecker-reveal` |
-| `[impeccable]` console prefix | `[uichecker]` |
-| `_impeccableOverlay` | `_uicheckerOverlay` |
-
-### Removed
-- Chrome Web Store `update_url` from manifest
-- `https://impeccable.style` link from popup footer
-- "Detected by [Impeccable](https://impeccable.style)" attribution in copy text
-
-### Preserved
-- Apache 2.0 license attribution (Copyright Paul Bakaus)
-- All 27 detection rules with identical logic and thresholds
-- `FIX_SKILLS` map values (functional skill identifiers: distill, polish, typeset, etc.)
-- Complete detection algorithm and color analysis logic
+**Sidebar:** Matches panel token system. `cat-slop` / `cat-quality` classes on `.finding` elements drive left-border colouring.
 
 ---
 
-*Based on the Impeccable extension by Paul Bakaus, licensed under Apache 2.0.*
+## Adding a new rule
+
+1. Add the rule metadata to `detector/antipatterns.json`:
+   ```json
+   { "id": "my-rule", "name": "My Rule", "category": "slop", "description": "..." }
+   ```
+
+2. Add detection logic in `detector/detect.js` inside the appropriate phase function. Return a finding object:
+   ```javascript
+   { type: 'my-rule', name: 'My Rule', category: 'slop', detail: '...', description: '...' }
+   ```
+
+3. Add a `FIX_SKILLS` entry in `panel.js` if there's a relevant fix workflow.
+
+---
+
+## Debug logging
+
+Every file logs via `console.debug('[uichecker:*]', ...)`. Namespaces:
+
+| Namespace | Where to see it |
+|---|---|
+| `[uichecker:sw]` | `chrome://inspect` → service workers |
+| `[uichecker:cs]` | Page DevTools console |
+| `[uichecker:panel]` | DevTools panel's own console (right-click panel → Inspect) |
+| `[uichecker:sidebar]` | Same as panel |
+| `[uichecker:popup]` | Right-click popup → Inspect |
+
+---
+
+## Permissions
+
+| Permission | Reason |
+|---|---|
+| `activeTab` | Access the current tab for scan |
+| `scripting` | Inject content script and detector |
+| `storage` | Persist settings via chrome.storage.sync |
+| `webNavigation` | Detect page navigations for auto-rescan |
+| `clipboardWrite` | Clone Page / Clone Component copy to clipboard |
+| `<all_urls>` (host) | Scan any page |
+
+---
+
+## Known limitations
+
+- Restricted pages (`chrome://`, Web Store, `file://` without flag) cannot be scanned
+- CSP-strict pages may block detector injection via script tag; the fallback uses `chrome.scripting.executeScript` with `world: 'MAIN'` which bypasses CSP
+- Service worker state is lost on termination; all state is rebuilt on reconnect
+- No automated tests — manual testing required after changes to `detect.js`

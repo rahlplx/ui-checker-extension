@@ -1,127 +1,142 @@
 # CLAUDE.md
 
-Guidance for Claude Code (and other AI agents) when working in this repo.
+Agent onboarding guide for UI Checker. Read this before making any changes.
 
-## What this repo is
+---
 
-UI Checker — a Manifest V3 Chrome DevTools extension that detects 27 deterministic UI anti-patterns (15 "AI slop" tells + 12 quality/a11y rules). **Hard fork of [Impeccable](https://github.com/pbakaus/impeccable)** (Apache 2.0, © Paul Bakaus) with branding stripped and replaced. All detection logic preserved verbatim.
+## What this is
 
-## Stack
+UI Checker is a **Manifest V3 Chrome DevTools extension** that detects 27 deterministic UI anti-patterns (15 AI tells + 12 quality/accessibility rules) in any web page. Findings are shown as red overlay boxes directly on the page and listed in the DevTools panel and Elements sidebar.
 
-- **Vanilla JS, no framework, no bundler, no build step inside this repo.**
-- Manifest V3. Service worker + content script + page-context detector.
-- No `package.json`, no `node_modules`, no test suite.
-- Storage: `chrome.storage.sync`.
+**No build step. No bundler. No framework. Pure vanilla JS.**
+
+---
 
 ## Install / run locally
 
-1. `chrome://extensions/` → enable Developer mode.
-2. "Load unpacked" → select repo root.
-3. Open DevTools (`F12`) on any page → **UI Checker** panel.
+1. `chrome://extensions` → enable Developer mode
+2. Load unpacked → select repo root
+3. Open DevTools (`F12`) on any page → **UI Checker** tab
 
-Nothing else. Do not look for npm scripts; there are none.
+---
 
-## Architecture (three contexts, one bridge)
+## Architecture in one paragraph
 
-```
-Popup / DevTools panel / Elements sidebar
-        │  chrome.runtime.connect (port) + sendMessage
-        ▼
-Service Worker (background/service-worker.js)
-   • tabState Map, panelPorts Map, badge, scan orchestration
-        │  chrome.tabs.sendMessage
-        ▼
-Content Script — isolated world (content/content-script.js)
-   • Idempotency guard: __UICHECKER_CS_LOADED__
-   • Bridge only — no detection logic here
-        │  window.postMessage
-        ▼
-Detector — page main world (detector/detect.js)
-   • All 27 rules, color parsing, selector gen, overlay rendering
-   • Config read from window.__UICHECKER_CONFIG__
-```
+The extension has four execution contexts. The **service worker** (`background/service-worker.js`) owns all state and routes messages. The **content script** (`content/content-script.js`) is a bridge injected into every scanned page — it injects the detector and relays messages. The **detector** (`detector/detect.js`) is a large IIFE injected into the page's MAIN world — it has full DOM access and runs all 27 checks. The **DevTools panel and sidebar** (`devtools/`) connect to the SW via chrome.runtime ports and display findings. Full details in `ARCHITECTURE.md`.
 
-Three message transports, do not confuse them:
-- `chrome.runtime.sendMessage` — popup/panel ↔ SW (one-shot)
-- `chrome.runtime.connect` — panel/sidebar ↔ SW (persistent ports, 20s heartbeat to keep MV3 SW alive)
-- `window.postMessage` — content script ↔ detector (channel names: `uichecker-command`, `uichecker-results`, `uichecker-ready`, `uichecker-overlays-toggled`)
+---
 
 ## File map
 
 | Path | Role |
 |---|---|
-| `manifest.json` | MV3 manifest. Perms: `activeTab`, `scripting`, `storage`, `webNavigation`, host `<all_urls>` |
-| `background/service-worker.js` | Central hub. Owns tabState, panelPorts, devtoolsTabs. Injects CS on demand. |
-| `content/content-script.js` | Isolated-world bridge. Injects `detector/detect.js` as a `<script>` into the page; falls back to `chrome.scripting.executeScript({world:'MAIN'})` on error. |
-| `detector/detect.js` | **GENERATED ARTIFACT.** ~112KB IIFE, all detection logic. See "Build pipeline caveat" below. |
-| `detector/antipatterns.json` | Rule metadata, extracted from the same source as `detect.js`. |
-| `devtools/devtools.{html,js}` | DevTools entrypoint. Creates panel + Elements sidebar, opens lifecycle port. |
-| `devtools/panel.{html,js,css}` | Findings panel UI, settings, copy, highlight, scan trigger. |
-| `devtools/sidebar.{html,js,css}` | Element-specific findings via `$0`. |
-| `popup/popup.{html,js,css}` | Toolbar popup — quick scan. |
-| `icons/` | 16/32/48/128 PNG + SVG (checkmark on dark bg, `#2563eb`). |
-| `ARCHITECTURE.md` | Full technical spec. Authoritative — read it before non-trivial edits. |
-| `chrome-ai-integration-patterns.md` | Reference notes on Chrome built-in AI APIs. Not currently used at runtime. |
-| `impeccable-branding-audit.json` | Rebrand diff record. Reference for completeness audits. |
-| `Impeccable-vs-UIChecker-Analysis.pdf` | Comparison artifact. |
+| `manifest.json` | MV3 manifest. Permissions: `activeTab`, `scripting`, `storage`, `webNavigation`, `clipboardWrite`, host `<all_urls>` |
+| `background/service-worker.js` | Central hub. Owns `tabState`, `panelPorts`, `devtoolsTabs`. Badge updates. |
+| `content/content-script.js` | Isolated-world bridge. Probe-then-inject pattern for detector. Relays findings to SW. |
+| `detector/detect.js` | All detection logic. IIFE, runs in page MAIN world. Idempotency via `window.__UICHECKER_PREV_HANDLER__`. |
+| `detector/antipatterns.json` | Rule metadata (id, name, category, description). 27 rules: 15 slop + 12 quality. |
+| `devtools/devtools.{html,js}` | DevTools entrypoint. Creates panel + Elements sidebar. Lifecycle port with heartbeat. |
+| `devtools/panel.{html,css,js}` | Main findings panel. Clone Page, Clone Component (uses `$0`), settings, findings list. |
+| `devtools/sidebar.{html,css,js}` | Elements sidebar. Shows findings for selected `$0`. Clone Component available here. |
+| `popup/popup.{html,css,js}` | Toolbar popup. Scan, overlay toggle, Clone Page, Clone Component redirect. |
+| `icons/` | 16/32/48/128 PNG icons |
 
-## Build pipeline caveat — read before editing detect.js
+---
 
-`ARCHITECTURE.md` documents that `detector/detect.js` and `detector/antipatterns.json` are **build artifacts** generated from `cli/engine/detect-antipatterns.mjs` via `scripts/build-extension.js`.
+## Critical rules — do not break these
 
-**Neither the source file nor the build script exists in this repo.** They live in upstream Impeccable. Practical consequences:
+**Idempotency guards — never remove:**
+- CS: `window.__UICHECKER_CS_LOADED__` prevents double content script injection
+- Detector: `window.__UICHECKER_PREV_HANDLER__` removes stale listener before re-attaching
 
-- Editing `detector/detect.js` directly works but diverges from upstream forever. Future Impeccable updates cannot be cleanly merged.
-- The clean path is: vendor `detect-antipatterns.mjs` + `build-extension.js` from upstream into this repo, then re-run the rebrand string replacements on every build.
-- If asked to "add a new rule" or "change a threshold," flag this trade-off before touching `detect.js`.
+**Probe pattern — CS injectAndScan():**
+Sends `ping` via `window.postMessage` first. Waits 120ms. If detector responds → scan directly. If no response → request SW `inject-fallback` (uses `chrome.scripting.executeScript` with `world:'MAIN'` — always re-executes, bypasses URL cache).
 
-Rebrand string substitutions that must be preserved on any upstream re-pull (see `ARCHITECTURE.md` §Rebranding for the full table):
-- `__IMPECCABLE_*__` → `__UICHECKER_*__`
-- `impeccable-*` message channels / CSS classes / dataset keys → `uichecker-*`
-- `window.impeccableScan` → `window.uiCheckerScan`
-- Brand color `oklch(55% 0.25 350)` → `oklch(55% 0.18 250)` (and the `45%` hover variant)
-- Badge `#d6336c` → `#2563eb`
-- Logo `/` → `✓`
+**Never use `<script src="...">` to inject detect.js** — browsers cache the URL and won't re-execute it on the same page.
 
-## Scan lifecycle (one paragraph)
+**Port heartbeat — never remove:**
+`devtools.js` and `panel.js` ping the SW every 20 seconds to keep the MV3 service worker alive.
 
-User triggers scan → SW calls `ensureContentScriptInjected(tabId)` → SW `sendMessage({action:'scan', config})` → CS injects detector if not loaded (sets `dataset.uicheckerExtension='true'`; falls back to `chrome.scripting` MAIN world on CSP failure) → detector reads `__UICHECKER_CONFIG__`, runs Phase 1 (per-element DOM walk, 9 check fns), Phase 2 (page-level aggregates), Phase 3 (HTML regex on cloned outerHTML) → posts `{source:'uichecker-results', findings, count}` → CS relays to SW → SW updates `tabState`, badge, notifies panels.
+**escapeHtml before any innerHTML** — `panel.js` and `sidebar.js` both define and use `escapeHtml()`. Never remove.
 
-SPA nav (`popstate`/`hashchange`) → CS sends rescan after 500ms. Full nav (`webNavigation.onCompleted`) → SW resets CS state, rescans if DevTools open.
+---
 
-## Conventions and traps
+## Scan lifecycle (brief)
 
-- **Idempotency.** CS checks `window.__UICHECKER_CS_LOADED__` and detector checks for prior `window.uiCheckerScan` before re-binding. Do not break these guards.
-- **Selector generator** (`generateSelector`) filters CSS-in-JS hashes (`css-*`, `sc-*`, `_*`) and own classes (`uichecker-*`). When adding overlay/UI elements, prefix classes with `uichecker-` so they are auto-excluded from scans.
-- **Color parsing** supports `rgb/rgba/hsl/hsla/hex/oklch/lch/oklab/lab/hwb`. `resolveBackground()` walks ancestors for first opaque bg; gradients fall back to `resolveGradientStops()` worst-case contrast.
-- **Three categories of findings** in `detector/antipatterns.json`: `slop` (15), `quality` (12). Each has `FIX_SKILLS` identifiers (`distill`, `polish`, `typeset`, ...) — these are referenced by name in upstream tooling; do not rename.
-- **MV3 SW lifecycle:** ports are kept alive by 20s heartbeat pings. If you add new long-lived connections, mirror this pattern.
-- **CSP-strict pages** (e.g. some banks, GitHub itself) block `<script>` injection; CS must fall back to `chrome.scripting.executeScript({world:'MAIN'})`. Test any new injection path against both.
+```
+User triggers scan
+→ SW: ensureContentScriptInjected → sends { action: 'scan', config } to tab
+→ CS: injectAndScan() → ping probe → (inject if needed) → sendScanCommand()
+→ Detector: runs 3-phase detection → posts uichecker-results
+→ CS: relays findings → SW: stores + notifies panels + updates badge
+→ Panel/Sidebar: renders findings
+```
 
-## What this extension does NOT do
+---
 
-- No network calls. Fully offline. No telemetry. (Verify before any PR that adds `fetch`/`XHR`.)
-- No LLM/AI calls at runtime. The Chrome AI integration doc is reference only.
-- No tests. Zero. Adding even smoke tests would be a high-value change.
+## Message channels
 
-## Common task playbook
+| Transport | Between | Actions |
+|---|---|---|
+| `chrome.runtime.sendMessage` | Popup/Panel → SW | `scan`, `get-state`, `findings`, `toggle-overlays`, `inject-fallback`, `disabled-rules-changed` |
+| `chrome.runtime.connect` (port) | Panel/Sidebar ↔ SW | `ping`, `scan`, `toggle-overlays`, `highlight`, `unhighlight` + pushed: `findings`, `navigated`, `overlays-toggled` |
+| `window.postMessage` | CS ↔ Detector | source `uichecker-command` (actions: `scan`, `ping`, `toggle-overlays`, `highlight`, `remove`) + source `uichecker-results`, `uichecker-ready`, `uichecker-overlays-toggled` |
 
-| Task | Path |
+---
+
+## Clone Component — DevTools only
+
+`$0` (the Elements panel selected element) is only accessible inside DevTools contexts. The panel and sidebar both use `chrome.devtools.inspectedWindow.eval()` to access it. The popup cannot — its Clone Component button redirects to the DevTools panel instead.
+
+---
+
+## Adding a new detection rule
+
+1. Add to `detector/antipatterns.json`: `{ "id": "...", "name": "...", "category": "slop|quality", "description": "..." }`
+2. Add detection in `detector/detect.js` in the appropriate phase function — return a finding object with `type`, `name`, `category`, `detail`, `description`
+3. Add a `FIX_SKILLS` entry in `panel.js` if relevant
+
+---
+
+## Design system
+
+**Popup:** Dark (#07090e base), CSS grid texture, semantic token system (surfaces s0–s4, borders b0–b3, text t1–t4). Score block with hero number + mini bar chart. Glass-blur toast.
+
+**Panel:** Dual theme (light default / `.theme-dark`). Purple `#a855f7` = AI tells. Amber `#f59e0b` = quality. Left-border accent on finding items by category. Ring spinner for navigation scan.
+
+**Sidebar:** Same token system. `.cat-slop` / `.cat-quality` drive left-border colouring.
+
+**Page overlays:** `oklch(60% 0.27 25)` (vivid red), 3px outline, subtle glow.
+
+---
+
+## Debug logging
+
+All files use `console.debug('[uichecker:namespace]', ...)`. Never use `console.log`.
+
+| `[uichecker:sw]` | `[uichecker:cs]` | `[uichecker:panel]` | `[uichecker:sidebar]` | `[uichecker:popup]` |
+
+View SW logs at `chrome://inspect` → Service workers → inspect.
+
+---
+
+## Common tasks
+
+| Task | Where |
 |---|---|
-| Add a new detection rule | Edit upstream `detect-antipatterns.mjs`, rebuild, re-apply rebrand. Or edit `detector/detect.js` + `detector/antipatterns.json` directly and accept divergence. |
-| Change a threshold | Same as above — `detect.js` is the artifact. |
-| New setting toggle | `getSettings()` defaults in `background/service-worker.js`, UI in `devtools/panel.{html,js}`, plumb through `buildScanConfig()` → `__UICHECKER_CONFIG__`. |
-| New finding overlay style | `detector/detect.js` overlay-creation block; CSS lives inline (page world cannot reach `panel.css`). Use `uichecker-` class prefix. |
-| Rebrand audit / verify no `impeccable` leaks | `grep -ri 'impeccable' --include='*.js' --include='*.json' --include='*.html' --include='*.css'` (excluding `ARCHITECTURE.md` and `impeccable-branding-audit.json`). |
+| Add detection rule | `detector/detect.js` + `detector/antipatterns.json` |
+| Change overlay colour | `detector/detect.js` → `OUTLINE_COLOR` constant |
+| Change overlay thickness | `detector/detect.js` → `outline: Npx solid` in injected CSS |
+| Add setting toggle | `buildScanConfig()` in SW + setting UI in `panel.html/js` + pass through `__UICHECKER_CONFIG__` |
+| Add panel toolbar button | `panel.html` + handler in `panel.js` |
+| Add popup action | `popup.html` + handler in `popup.js` |
+| Debug scan not running | Check `[uichecker:cs]` in page console — look for probe/inject log |
+| Debug findings not showing | Check `[uichecker:sw]` in `chrome://inspect` — look for findings received log |
 
-## License
+---
 
-Apache 2.0. Upstream copyright retained: © Paul Bakaus (Impeccable). `LICENSE` file present.
+## Known limitations
 
-## Known soft spots (flagged for future hardening)
-
-- Build source missing from repo → upstream sync is manual and error-prone.
-- No tests, no CI.
-- No CWS listing artifacts (privacy policy, screenshots, store description) — required if you ever publish.
-- `chrome-ai-integration-patterns.md` exists but no runtime hook — either wire it up or move to `docs/`.
-- `Impeccable-vs-UIChecker-Analysis.pdf` (68KB) and `impeccable-branding-audit.json` (60KB) are large artifacts in repo root. Consider moving to `docs/audit/`.
+- Restricted pages (`chrome://`, Web Store, `file://` without flag) block injection — scan silently fails
+- No automated tests — all testing is manual via `chrome://extensions` → Load unpacked
+- Service worker state resets on termination; reconnect rebuilds it transparently

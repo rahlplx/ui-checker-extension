@@ -1,17 +1,16 @@
 /**
  * Anti-Pattern Browser Detector for UI Checker (Extension Variant)
- * Copyright (c) 2026 Paul Bakaus
+ * Copyright (c) 2026 UI Checker
  * SPDX-License-Identifier: Apache-2.0
  *
- * GENERATED -- do not edit. Source: detect-antipatterns.mjs
- * Rebuild: node scripts/build-extension.js
+ * Detects 27 deterministic UI anti-patterns in any web page.
  */
 (function () {
 if (typeof window === 'undefined') return;
 
 /**
  * Anti-Pattern Detector for UI Checker
- * Copyright (c) 2026 Paul Bakaus
+ * Copyright (c) 2026 UI Checker
  * SPDX-License-Identifier: Apache-2.0
  *
  * Universal file — auto-detects environment (browser vs Node) and adapts.
